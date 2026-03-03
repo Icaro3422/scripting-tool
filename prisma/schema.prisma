@@ -1,0 +1,111 @@
+// Prisma schema - Scripting Tool (YouTube automation)
+// Run: podman-compose up -d  then  npx prisma db push
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String    @id @default(cuid())
+  clerkId       String    @unique
+  email         String?
+  name          String?
+  imageUrl      String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  channels      Channel[]
+  projects      Project[]
+  presets       Preset[]
+  scripts       Script[]
+  thumbnails    Thumbnail[]
+}
+
+model Channel {
+  id              String    @id @default(cuid())
+  userId          String
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  youtubeChannelId String   @unique  // ID del canal en YouTube
+  url             String?   // URL del canal (ej: youtube.com/channel/UC...)
+  title           String?
+  description     String?   @db.Text
+  customUrl       String?
+  thumbnailUrl    String?
+  bannerUrl       String?
+  subscriberCount Int       @default(0)
+  videoCount      Int       @default(0)
+  viewCount       String?   // puede ser muy grande
+  country         String?
+  publishedAt     DateTime?
+  // Mapeo / análisis (estilo Scripzy)
+  analysis        Json?     // engagement, tono, colores, etc.
+  presetIds       String[]  @default([]) // IDs de presets generados desde este canal
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  projects        Project[]
+  presets         Preset[]
+}
+
+model Preset {
+  id          String    @id @default(cuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  channelId   String?
+  channel     Channel?  @relation(fields: [channelId], references: [id], onDelete: SetNull)
+  name        String
+  description String?   @db.Text
+  // Contenido del preset para dar contexto a la IA
+  payload     Json      // tono, colores, formato título, estructura script, etc.
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  scripts     Script[]
+}
+
+model Project {
+  id          String    @id @default(cuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  channelId   String?
+  channel     Channel?  @relation(fields: [channelId], references: [id], onDelete: SetNull)
+  title       String    // título del video / proyecto
+  description String?   @db.Text
+  status      String    @default("draft") // draft | script_ready | thumbnail_ready | ready
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  scripts     Script[]
+  thumbnails  Thumbnail[]
+}
+
+model Script {
+  id          String    @id @default(cuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  projectId   String
+  project     Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  presetId    String?
+  preset      Preset?   @relation(fields: [presetId], references: [id], onDelete: SetNull)
+  title       String    // título del video (generado o editado)
+  content     String    @db.Text
+  blobUrl     String?   // opcional: si se guarda en Vercel Blob
+  aiProvider  String?   // openai | anthropic | deepseek | google
+  aiModel     String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+model Thumbnail {
+  id          String    @id @default(cuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  projectId   String
+  project     Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  blobUrl     String    // Vercel Blob o Cloudinary URL
+  prompt      String?   @db.Text
+  aiProvider  String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
