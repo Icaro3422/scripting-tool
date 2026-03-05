@@ -11,7 +11,7 @@ const nextConfig: NextConfig = {
     ],
     // Vercel Blob URLs vary (e.g. xxx.public.blob.vercel-storage.com); use unoptimized or <img> if needed
   },
-  serverExternalPackages: ["@anthropic-ai/sdk", "googleapis"],
+  serverExternalPackages: ["@anthropic-ai/sdk", "googleapis", "cloudinary"],
 };
 
 export default nextConfig;

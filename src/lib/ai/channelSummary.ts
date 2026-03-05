@@ -6,8 +6,9 @@ export interface ChannelViralSummary {
   suggestedTone: string;
   suggestedFormat: string;
   viralSummary: string;
-  /** Colores o estilo visual si se puede inferir de la descripción */
   brandHints?: string;
+  /** Estilo de miniatura de la competencia: "few" = pocas palabras (2-4), "many" = muchas palabras (5-8) */
+  thumbnailWordStyle?: "few" | "many";
 }
 
 const FALLBACK: ChannelViralSummary = {
@@ -47,7 +48,8 @@ Responde ÚNICAMENTE con un JSON válido (sin markdown, sin \`\`\`) con estas cl
 - "suggestedTone": tono de voz en 1 línea (ej. "Misterioso, sensacionalista, gancho en el título")
 - "suggestedFormat": formato típico en 1 línea (ej. "Listados, mini-documentales, curiosidades")
 - "viralSummary": 2-4 frases explicando por qué el canal engancha: público objetivo, tipo de gancho, estilo de miniatura/título si se infiere
-- "brandHints": (opcional) colores, estilo visual o marca si se menciona en la descripción; si no, omite la clave`;
+- "brandHints": (opcional) colores, estilo visual o marca si se menciona en la descripción; si no, omite la clave
+- "thumbnailWordStyle": (opcional) "few" si las miniaturas del canal/nicho suelen llevar poco texto (2-4 palabras), "many" si llevan más texto (5-8 palabras); si no puedes inferirlo, omite la clave`;
 
   for (const { provider, model } of PROVIDER_ORDER) {
     try {
@@ -63,6 +65,10 @@ Responde ÚNICAMENTE con un JSON válido (sin markdown, sin \`\`\`) con estas cl
           suggestedFormat: String(parsed.suggestedFormat),
           viralSummary: String(parsed.viralSummary),
           brandHints: parsed.brandHints ? String(parsed.brandHints) : undefined,
+          thumbnailWordStyle:
+            parsed.thumbnailWordStyle === "few" || parsed.thumbnailWordStyle === "many"
+              ? parsed.thumbnailWordStyle
+              : undefined,
         };
       }
     } catch {

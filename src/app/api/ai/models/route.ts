@@ -42,8 +42,8 @@ export async function GET() {
     const data = (await res.json()) as { data?: { id: string; name?: string; pricing?: { prompt?: string; completion?: string } }[] };
     const openRouterList = data.data ?? [];
     const openRouterModels = openRouterList
-      .filter((m) => m.id && !m.id.includes("embedding") && !m.id.includes("vision"))
-      .slice(0, 80)
+      .filter((m) => m.id && !m.id.includes("embedding") && !m.id.includes("vision") && !m.id.includes("image"))
+      .slice(0, 150)
       .map((m) => ({
         id: m.id,
         name: m.name ?? m.id,

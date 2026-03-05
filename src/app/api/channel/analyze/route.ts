@@ -40,6 +40,7 @@ export async function POST(req: NextRequest) {
           suggestedFormat: summary.suggestedFormat,
           viralSummary: summary.viralSummary,
           brandHints: summary.brandHints,
+          thumbnailWordStyle: summary.thumbnailWordStyle,
         };
       } catch (e) {
         console.warn("Channel viral summary failed:", e);
@@ -77,6 +78,7 @@ export async function POST(req: NextRequest) {
           suggestedFormat: analysis.suggestedFormat,
           viralSummary: analysis.viralSummary,
           brandHints: analysis.brandHints,
+          thumbnailWordStyle: (analysis as { thumbnailWordStyle?: "few" | "many" }).thumbnailWordStyle,
         },
       },
       update: {
@@ -97,6 +99,7 @@ export async function POST(req: NextRequest) {
           suggestedFormat: analysis.suggestedFormat,
           viralSummary: analysis.viralSummary,
           brandHints: analysis.brandHints,
+          thumbnailWordStyle: (analysis as { thumbnailWordStyle?: "few" | "many" }).thumbnailWordStyle,
         },
       },
     });

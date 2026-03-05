@@ -121,11 +121,16 @@ export async function chatCompletion(
         max_tokens: maxTokens,
       }),
     });
+    const raw = await res.text();
     if (!res.ok) {
-      const err = await res.text();
-      throw new Error(`OpenRouter: ${res.status} ${err}`);
+      throw new Error(`OpenRouter: ${res.status} ${raw.slice(0, 200)}`);
     }
-    const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
+    let data: { choices?: { message?: { content?: string } }[] };
+    try {
+      data = JSON.parse(raw) as { choices?: { message?: { content?: string } }[] };
+    } catch {
+      throw new Error(`OpenRouter devolvió una respuesta no válida. Prueba otro modelo.`);
+    }
     return data.choices?.[0]?.message?.content ?? "";
   }
 

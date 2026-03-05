@@ -37,7 +37,7 @@ export async function POST(req: NextRequest) {
       topic: string;
       modelId: string;
       provider?: string;
-      type: "script" | "title" | "description";
+      type: "script" | "title" | "description" | "tags";
       /** Duración objetivo del video en minutos (1–120). Define longitud del guion. */
       targetDurationMinutes?: number;
     };
@@ -57,7 +57,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Proyecto no encontrado" }, { status: 404 });
     }
 
-    const latestScriptContent = type === "description" ? project.scripts[0]?.content ?? "" : "";
+    const latestScriptContent = type === "description" || type === "tags" ? project.scripts[0]?.content ?? "" : "";
 
     let provider: string;
     let modelForApi: string;
@@ -83,7 +83,8 @@ export async function POST(req: NextRequest) {
 
     const scriptMinutes = type === "script" ? Math.min(120, Math.max(1, targetDurationMinutes ?? 5)) : undefined;
     const systemPrompt = buildSystemPrompt(type, presetPayload, scriptMinutes);
-    const userPrompt = buildUserPrompt(type, topic, presetPayload, scriptMinutes, latestScriptContent);
+    const thumbnailPhrase = (body as { thumbnailPhrase?: string }).thumbnailPhrase ?? project.title;
+    const userPrompt = buildUserPrompt(type, topic, presetPayload, scriptMinutes, latestScriptContent, thumbnailPhrase);
 
     const completionOptions =
       type === "script" && scriptMinutes != null
@@ -147,6 +148,19 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ generated: content.trim() });
     }
 
+    if (type === "tags") {
+      const raw = content.trim();
+      const tags: string[] = [];
+      const lines = raw.split(/\n/).map((s) => s.replace(/^[-*•]\s*/, "").trim()).filter(Boolean);
+      for (const line of lines) {
+        const match = line.match(/^[\d.]+\s*(.+)$/) ?? [null, line];
+        const tag = (match[1] ?? line).replace(/^["']|["']$/g, "").trim();
+        if (tag.length > 0 && tag.length <= 100) tags.push(tag);
+      }
+      if (tags.length === 0 && raw.length > 0) tags.push(raw.slice(0, 100));
+      return NextResponse.json({ generated: raw, tags: tags.slice(0, 30) });
+    }
+
     return NextResponse.json({ error: "type no válido" }, { status: 400 });
   } catch (e: unknown) {
     console.error(e);
@@ -170,7 +184,7 @@ export async function POST(req: NextRequest) {
 }
 
 function buildSystemPrompt(
-  type: "script" | "title" | "description",
+  type: "script" | "title" | "description" | "tags",
   preset: Record<string, unknown>,
   targetMinutes?: number
 ): string {
@@ -193,37 +207,49 @@ Responde solo con el texto del guion, sin encabezados ni explicaciones.`;
 ${presetCtx}
 Responde solo con el título, sin comillas ni explicaciones.`;
   }
+  if (type === "tags") {
+    return `Eres un experto en SEO y tendencias para YouTube. Genera una lista de ETIQUETAS (tags) para el video que tengan alto potencial de búsqueda.
+Criterios: palabras y frases que la gente busca en YouTube, términos relacionados con el tema, variantes (español/LATAM), tendencias en el nicho.
+Responde ÚNICAMENTE con una lista numerada de 15 a 25 etiquetas, una por línea, sin explicaciones. Cada etiqueta: máximo 3-4 palabras, en minúsculas.`;
+  }
   if (type === "description") {
-    return `Eres un experto en descripciones para YouTube. Genera SIEMPRE la descripción en español con esta estructura exacta:
+    return `Eres un experto en descripciones para YouTube, orientado a SEO y engagement. Genera SIEMPRE la descripción en español con esta estructura:
 
-1) BLOQUE INICIAL (palabras clave del video): Un encabezado corto tipo "Cómo empezar HOY:" o similar, seguido de 2-4 líneas de acción o reflexión (bullets o frases cortas) que resuman el contenido.
+REQUISITO SEO – PRIMEROS 200 CARACTERES (crítico para búsqueda):
+- Las primeras 200 caracteres deben incluir: (1) Palabras clave del canal que te indiquen, (2) La frase o concepto de la miniatura/título del video, (3) Temas concretos del script. Sin relleno; máximo impacto para el algoritmo y el CTR.
+- Optimiza todo el texto para SEO: palabras clave naturales, términos que la gente busca, sin keyword stuffing.
 
-2) SECCIÓN DE REFLEXIÓN: Una o dos preguntas o una breve reflexión que conecte con el espectador (relacionada con el tema del video).
+1) BLOQUE INICIAL (≈200 caracteres): Encabezado gancho + frase de la miniatura + keywords del canal + temas del script. 2-4 líneas que enganchen y posicionen.
+
+2) SECCIÓN DE REFLEXIÓN: Una o dos preguntas o breve reflexión que conecte con el espectador.
 
 3) Línea separadora: "______" (guiones bajos).
 
-4) Opcionalmente un párrafo de bienvenida/contexto del canal si encaja (ej. "Bienvenidos a... Este espacio...").
+4) Párrafo breve de bienvenida/contexto del canal si encaja.
 
-5) LISTA DE TIMESTAMPS (capítulos): Si te proporcionan el script del video, deriva de él los momentos clave y genera una lista con formato exacto:
-00:00 Título del primer momento
-01:30 Título del siguiente
+5) LISTA DE TIMESTAMPS (capítulos): Deriva del script. Formato exacto:
+00:00 Título del momento
+01:30 Siguiente
 ...
-Cada línea: minutos:segundos (dos dígitos) + espacio + Título corto. Los timestamps deben corresponder a secciones lógicas del script (saludo, introducción, tema 1, tema 2, cierre, etc.). Estima los minutos según la longitud del script (~150 palabras por minuto).
+(~150 palabras por minuto del script).
 
-6) Opcional al final: "Inspirado por" seguido de una línea en blanco y una lista de 2-5 títulos de videos relacionados (solo títulos, uno por línea), como referencia de contenido similar.
+6) SECCIÓN DE ENGAGEMENT (sutil): Una o dos frases que inviten a suscribirse, seguir o compartir sin ser spam. Ej: "Si te sirvió, suscríbete para más" o "Comparte con quien le pueda ayudar". Natural y breve.
+
+7) Opcional: "Inspirado por" + 2-5 títulos de videos relacionados.
 
 ${presetCtx}
-Responde ÚNICAMENTE con el texto de la descripción, sin explicaciones ni encabezados tipo "Descripción:".`;
+Responde ÚNICAMENTE con el texto de la descripción, sin encabezados tipo "Descripción:".`;
   }
   return presetCtx || "Genera contenido para YouTube.";
 }
 
 function buildUserPrompt(
-  type: "script" | "title" | "description",
+  type: "script" | "title" | "description" | "tags",
   topic: string,
-  _preset: Record<string, unknown>,
+  preset: Record<string, unknown>,
   targetMinutes?: number,
-  scriptContent?: string
+  scriptContent?: string,
+  thumbnailPhrase?: string
 ): string {
   if (type === "script") {
     const lengthLine =
@@ -233,12 +259,29 @@ function buildUserPrompt(
     return `Tema del video: ${topic}${lengthLine}`;
   }
   if (type === "title") return `Tema o título base: ${topic}`;
-  if (type === "description") {
-    let user = `Título o tema del video: ${topic}.`;
+  if (type === "tags") {
+    let user = `Tema o título del video: ${topic}.`;
     if (scriptContent && scriptContent.trim()) {
-      user += `\n\nScript del video (úsalo para generar la lista de timestamps/capítulos con 00:00 Título por sección):\n\n${scriptContent.slice(0, 12000)}`;
+      user += `\n\nResumen del contenido (para afinar etiquetas):\n${scriptContent.slice(0, 3000)}`;
+    }
+    return user;
+  }
+  if (type === "description") {
+    const keywordsFromPreset = [preset.suggestedTone, preset.viralSummary, preset.brandHints, preset.suggestedFormat]
+      .filter(Boolean)
+      .map(String)
+      .join("; ");
+    let user = `Título o tema del video: ${topic}.`;
+    if (thumbnailPhrase?.trim()) {
+      user += `\n\nFrase o concepto de la miniatura (inclúyela en los primeros 200 caracteres): "${thumbnailPhrase.trim()}".`;
+    }
+    if (keywordsFromPreset) {
+      user += `\n\nPalabras clave / estilo del canal (inclúyelas de forma natural en los primeros 200 caracteres): ${keywordsFromPreset}.`;
+    }
+    if (scriptContent && scriptContent.trim()) {
+      user += `\n\nScript del video (úsalo para timestamps y temas para SEO):\n\n${scriptContent.slice(0, 12000)}`;
     } else {
-      user += "\n\nNo hay script disponible; genera la descripción con la estructura indicada pero omite o estima los timestamps si no puedes derivarlos.";
+      user += "\n\nNo hay script disponible; genera la descripción con la estructura indicada y estima timestamps si hace falta.";
     }
     return user;
   }

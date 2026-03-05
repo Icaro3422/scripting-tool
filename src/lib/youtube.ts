@@ -19,6 +19,8 @@ export interface ChannelAnalysis {
   suggestedFormat?: string;
   viralSummary?: string;
   brandHints?: string;
+  /** Estilo de miniatura de la competencia: "few" = pocas palabras, "many" = muchas palabras */
+  thumbnailWordStyle?: "few" | "many";
 }
 
 function getYoutubeClient() {

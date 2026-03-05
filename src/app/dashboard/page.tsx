@@ -1,16 +1,22 @@
 import Link from "next/link";
-import { FolderPlus, Link2, FileText } from "lucide-react";
+import { FolderPlus, Link2 } from "lucide-react";
+import { InstallPwaButton } from "@/components/InstallPwaButton";
 
 export default function DashboardPage() {
   return (
     <div className="p-8 max-w-4xl">
-      <h1 className="text-2xl font-semibold text-[rgb(var(--text-primary))] mb-2">
-        Dashboard
-      </h1>
-      <p className="text-[rgb(var(--text-secondary))] mb-8">
-        Crea proyectos, analiza canales para presets y genera scripts, títulos y
-        descripciones con IA.
-      </p>
+      <div className="flex flex-wrap items-center justify-between gap-4 mb-8">
+        <div>
+          <h1 className="text-2xl font-semibold text-[rgb(var(--text-primary))] mb-2">
+            Dashboard
+          </h1>
+          <p className="text-[rgb(var(--text-secondary))]">
+            Crea proyectos, analiza canales para presets y genera scripts, títulos y
+            descripciones con IA.
+          </p>
+        </div>
+        <InstallPwaButton />
+      </div>
 
       <div className="grid gap-4 sm:grid-cols-2">
         <Link

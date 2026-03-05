@@ -98,14 +98,15 @@ model Script {
 }
 
 model Thumbnail {
-  id          String    @id @default(cuid())
-  userId      String
-  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  projectId   String
-  project     Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  blobUrl     String    // Vercel Blob o Cloudinary URL
-  prompt      String?   @db.Text
-  aiProvider  String?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  id            String    @id @default(cuid())
+  userId        String
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  projectId     String
+  project       Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  blobUrl       String    // Vercel Blob o Cloudinary URL
+  prompt        String?   @db.Text
+  aiProvider    String?
+  fragmentIndex Int?      // Si está definido, es imagen de escena (fragmento del script); si no, es miniatura del proyecto
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 }

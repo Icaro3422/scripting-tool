@@ -11,11 +11,15 @@ import {
   Loader2,
   ChevronLeft,
   Sparkles,
+  Tag,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { AI_MODELS } from "@/types/ai";
-import { DURATION_PRESETS } from "@/lib/scriptUtils";
-import { countWords, estimatedMinutes } from "@/lib/scriptUtils";
+import { AI_MODELS, SCRIPT_RECOMMENDED_IDS, THUMBNAIL_IMAGE_MODELS } from "@/types/ai";
+import { DURATION_PRESETS, countWords, estimatedMinutes } from "@/lib/scriptUtils";
+import { ScriptFragmentsTable } from "@/components/ScriptFragmentsTable";
+import { getStorageMode, setLocalThumbPath, setLocalThumbData, getLocalFolderName, setLocalFolderName, LOCAL_URL_PREFIX } from "@/lib/client-storage";
+import { LocalThumbnailImage } from "@/components/LocalThumbnailImage";
+import { LocalThumbnailWithPath } from "@/components/LocalThumbnailWithPath";
 
 interface AIModelItem {
   id: string;
@@ -25,7 +29,7 @@ interface AIModelItem {
   openRouterId?: string | null;
 }
 
-type TabId = "script" | "title" | "description" | "thumbnail";
+type TabId = "script" | "title" | "description" | "tags" | "thumbnail";
 
 interface Project {
   id: string;
@@ -33,7 +37,7 @@ interface Project {
   description: string | null;
   status: string;
   scripts: { id: string; title: string; content: string; aiModel: string | null; createdAt: string }[];
-  thumbnails: { id: string; blobUrl: string }[];
+  thumbnails: { id: string; blobUrl: string; fragmentIndex?: number | null }[];
   channel: unknown;
 }
 
@@ -59,6 +63,7 @@ export default function ProjectDetailPage() {
   const [generatedScript, setGeneratedScript] = useState<string | null>(null);
   const [generatedTitle, setGeneratedTitle] = useState<string | null>(null);
   const [generatedDescription, setGeneratedDescription] = useState<string | null>(null);
+  const [generatedTags, setGeneratedTags] = useState<string[]>([]);
   const [lastScriptStats, setLastScriptStats] = useState<{
     wordCount: number;
     estimatedMinutes: number;
@@ -70,6 +75,18 @@ export default function ProjectDetailPage() {
   const [thumbReferenceHint, setThumbReferenceHint] = useState("");
   const [thumbLoading, setThumbLoading] = useState(false);
   const [thumbError, setThumbError] = useState<string | null>(null);
+  const [thumbImageModelId, setThumbImageModelId] = useState(THUMBNAIL_IMAGE_MODELS[0]?.id ?? "google/gemini-2.5-flash-image");
+  const [thumbWordStyle, setThumbWordStyle] = useState<"preset" | "few" | "many">("preset");
+  const [sceneImageModelId, setSceneImageModelId] = useState("black-forest-labs/flux.2-pro");
+  const [sceneImageLoading, setSceneImageLoading] = useState<number | null>(null);
+  const [sceneImageError, setSceneImageError] = useState<string | null>(null);
+  const [storageMode, setStorageModeState] = useState<"cloud" | "local">("cloud");
+  const [localFolderName, setLocalFolderNameState] = useState<string | null>(null);
+
+  useEffect(() => {
+    setStorageModeState(getStorageMode());
+    setLocalFolderNameState(getLocalFolderName());
+  }, []);
 
   useEffect(() => {
     if (!id) return;
@@ -82,7 +99,15 @@ export default function ProjectDetailPage() {
       if (presetsData.presets) setPresets(presetsData.presets);
       if (modelsData.models?.length) {
         setAiModels(modelsData.models);
-        if (!modelId && modelsData.models[0]) setModelId(modelsData.models[0].openRouterId || modelsData.models[0].id);
+        const list = modelsData.models as AIModelItem[];
+        const preferred = list.find((m: AIModelItem) => m.costTier === "free") ?? list.find((m: AIModelItem) => SCRIPT_RECOMMENDED_IDS.has(m.openRouterId || m.id)) ?? list[0];
+        if (list.length && (!modelId || !list.some((m: AIModelItem) => (m.openRouterId || m.id) === modelId))) {
+          setModelId(preferred?.openRouterId || preferred?.id || list[0].openRouterId || list[0].id);
+        } else if (!modelId && preferred) {
+          setModelId(preferred.openRouterId || preferred.id);
+        } else if (!modelId && list[0]) {
+          setModelId(list[0].openRouterId || list[0].id);
+        }
       } else {
         setAiModels(AI_MODELS.map((m) => ({ id: m.id, name: m.name, provider: m.provider, costTier: m.costTier, openRouterId: null })));
       }
@@ -99,6 +124,29 @@ export default function ProjectDetailPage() {
       setThumbError("Escribe un título o usa el del proyecto.");
       return;
     }
+    const storageMode = getStorageMode();
+    if (storageMode === "local" && typeof window !== "undefined" && !("showDirectoryPicker" in window)) {
+      setThumbError("Modo local requiere un navegador con File System Access (Chrome/Edge). Usa modo Nube o otro navegador.");
+      return;
+    }
+    if (storageMode === "local" && typeof window !== "undefined") {
+      const win = window as unknown as { __scriptingToolDirHandle?: FileSystemDirectoryHandle; showDirectoryPicker?: () => Promise<FileSystemDirectoryHandle> };
+      if (!win.__scriptingToolDirHandle) {
+        try {
+          const handle = await win.showDirectoryPicker!();
+          win.__scriptingToolDirHandle = handle;
+          setLocalFolderName(handle.name);
+          setLocalFolderNameState(handle.name);
+        } catch (e) {
+          if ((e as Error).name === "AbortError") {
+            setThumbError("Selecciona la carpeta donde guardar las miniaturas (ej. /Volumes/B/Downloads/scripting) para que el archivo se guarde en disco.");
+            return;
+          }
+          setThumbError(e instanceof Error ? e.message : "No se pudo acceder a la carpeta.");
+          return;
+        }
+      }
+    }
     setThumbLoading(true);
     setThumbError(null);
     try {
@@ -110,22 +158,51 @@ export default function ProjectDetailPage() {
           title: titleText,
           colors: thumbColors.trim() || undefined,
           referenceHint: thumbReferenceHint.trim() || undefined,
+          storageMode,
+          modelId: thumbImageModelId,
+          presetId: presetId || undefined,
+          thumbnailWordStyle: thumbWordStyle !== "preset" ? thumbWordStyle : undefined,
         }),
       });
       const data = await res.json();
       if (!res.ok) {
         setThumbError(data.error || data.detail || "Error al generar miniatura");
-        if (data.code === "OPENROUTER_KEY_MISSING" || data.code === "BLOB_MISSING") {
+        if (data.code === "OPENROUTER_KEY_MISSING" || data.code === "STORAGE_MISSING") {
           setThumbError((prev) => (prev ? `${prev} ${data.hint ?? ""}` : prev));
         }
         return;
       }
+      const thumbnail = data.thumbnail as { id: string; blobUrl: string };
+      let localSaveError: string | null = null;
+      if (data.imageBase64 && storageMode === "local") {
+        await setLocalThumbData(thumbnail.id, data.imageBase64);
+        const win = typeof window !== "undefined" ? (window as unknown as { __scriptingToolDirHandle?: FileSystemDirectoryHandle }) : undefined;
+        const handle = win?.__scriptingToolDirHandle;
+        if (handle) {
+          try {
+            const dir = await handle.getDirectoryHandle("scripting-tool", { create: true });
+            const projectDir = await dir.getDirectoryHandle(id, { create: true });
+            const fileName = `thumb-${thumbnail.id}.png`;
+            const file = await projectDir.getFileHandle(fileName, { create: true });
+            const w = await file.createWritable();
+            const buf = Uint8Array.from(atob(data.imageBase64), (c) => c.charCodeAt(0));
+            await w.write(buf);
+            await w.close();
+            await setLocalThumbPath(thumbnail.id, `${id}/${fileName}`, fileName);
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : "Error al escribir";
+            localSaveError = `Miniatura guardada en la app, pero no en la carpeta: ${msg}. Vuelve a seleccionar la carpeta y genera de nuevo.`;
+          }
+        } else {
+          localSaveError = "Miniatura guardada en la app. Para guardarla en tu carpeta, genera otra miniatura y selecciona la carpeta cuando te la pida.";
+        }
+      }
       setProject((prev) =>
-        prev && data.thumbnail
-          ? { ...prev, thumbnails: [data.thumbnail, ...prev.thumbnails] }
+        prev && thumbnail
+          ? { ...prev, thumbnails: [{ ...thumbnail, blobUrl: thumbnail.blobUrl }, ...prev.thumbnails] }
           : prev
       );
-      setThumbError(null);
+      setThumbError(localSaveError ?? null);
     } catch (e) {
       setThumbError(e instanceof Error ? e.message : "Error");
     } finally {
@@ -133,7 +210,7 @@ export default function ProjectDetailPage() {
     }
   }
 
-  async function handleGenerate(type: "script" | "title" | "description") {
+  async function handleGenerate(type: "script" | "title" | "description" | "tags") {
     const topicText = type === "script" ? topic : project?.title ?? topic;
     if (!topicText.trim()) {
       setError("Escribe el tema o título para generar.");
@@ -156,7 +233,14 @@ export default function ProjectDetailPage() {
           targetDurationMinutes: targetMinutes,
         }),
       });
-      const data = await res.json();
+      const raw = await res.text();
+      let data: { error?: string; hint?: string; generated?: string; tags?: string[]; script?: unknown; wordCount?: number; estimatedDurationMinutes?: number; targetDurationMinutes?: number; targetMet?: boolean };
+      try {
+        data = raw ? JSON.parse(raw) : {};
+      } catch {
+        setError(res.ok ? "La respuesta del servidor no es válida." : `Error del servidor (${res.status}). Prueba otro modelo o revisa OPENROUTER_API_KEY.`);
+        return;
+      }
       if (!res.ok) {
         const msg = data.hint
           ? `${data.error || "Error al generar"}. ${data.hint}`
@@ -178,7 +262,11 @@ export default function ProjectDetailPage() {
       }
       if (type === "title") setGeneratedTitle(generated);
       if (type === "description") setGeneratedDescription(generated);
-      if (data.script) setProject((prev) => prev ? { ...prev, scripts: [data.script, ...prev.scripts] } : null);
+      if (type === "tags" && Array.isArray(data.tags)) setGeneratedTags(data.tags);
+      if (data.script) {
+        const newScript = data.script as Project["scripts"][number];
+        setProject((prev) => prev ? { ...prev, scripts: [newScript, ...prev.scripts] } : null);
+      }
       if (data.generated && (type === "title" || type === "description")) {
         setProject((prev) =>
           prev
@@ -214,10 +302,99 @@ export default function ProjectDetailPage() {
     { id: "script", label: "Script", icon: <FileText className="h-4 w-4" /> },
     { id: "title", label: "Título", icon: <Type className="h-4 w-4" /> },
     { id: "description", label: "Descripción", icon: <AlignLeft className="h-4 w-4" /> },
+    { id: "tags", label: "Etiquetas SEO", icon: <Tag className="h-4 w-4" /> },
     { id: "thumbnail", label: "Miniatura", icon: <ImageIcon className="h-4 w-4" /> },
   ];
 
   const latestScript = project.scripts[0];
+  const scriptContentForFragments = (generatedScript ?? latestScript?.content ?? "").trim();
+  // Mostrar todos los modelos disponibles para el script (recomendados primero, luego gratuitos, luego el resto)
+  const allScriptModels = aiModels.length ? aiModels : AI_MODELS.map((m) => ({ id: m.id, name: m.name, provider: m.provider, costTier: m.costTier, openRouterId: null as string | null }));
+  const modelsForScriptDropdown = [...allScriptModels].sort((a, b) => {
+    const aRec = SCRIPT_RECOMMENDED_IDS.has(a.openRouterId || a.id) ? 1 : 0;
+    const bRec = SCRIPT_RECOMMENDED_IDS.has(b.openRouterId || b.id) ? 1 : 0;
+    if (bRec !== aRec) return bRec - aRec;
+    if (a.costTier === "free" && b.costTier !== "free") return -1;
+    if (b.costTier === "free" && a.costTier !== "free") return 1;
+    return (a.name ?? a.id).localeCompare(b.name ?? b.id);
+  });
+
+  async function handleGenerateScene(fragmentIndex: number, sceneText: string) {
+    if (!project) return;
+    setSceneImageError(null);
+    const storageModeForScene = getStorageMode();
+    if (storageModeForScene === "local" && typeof window !== "undefined") {
+      const win = window as unknown as { __scriptingToolDirHandle?: FileSystemDirectoryHandle; showDirectoryPicker?: () => Promise<FileSystemDirectoryHandle> };
+      if (!win.__scriptingToolDirHandle) {
+        try {
+          const handle = await win.showDirectoryPicker!();
+          win.__scriptingToolDirHandle = handle;
+          setLocalFolderName(handle.name);
+          setLocalFolderNameState(handle.name);
+        } catch (e) {
+          if ((e as Error).name === "AbortError") {
+            setSceneImageError("Selecciona la carpeta donde guardar las imágenes de escenas.");
+            return;
+          }
+          setSceneImageError(e instanceof Error ? e.message : "No se pudo acceder a la carpeta.");
+          return;
+        }
+      }
+    }
+    setSceneImageLoading(fragmentIndex);
+    const modelForApi = sceneImageModelId.startsWith("openrouter:") ? sceneImageModelId.replace(/^openrouter:/, "") : sceneImageModelId;
+    try {
+      const res = await fetch("/api/scene-image/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          projectId: id,
+          fragmentIndex,
+          sceneText,
+          modelId: modelForApi,
+          storageMode: storageModeForScene,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setSceneImageError(data.error || "Error al generar imagen de la escena");
+        return;
+      }
+      const thumb = data.thumbnail as { id: string; blobUrl: string; fragmentIndex: number };
+      if (data.imageBase64 && storageModeForScene === "local") {
+        await setLocalThumbData(thumb.id, data.imageBase64);
+        const win = typeof window !== "undefined" ? (window as unknown as { __scriptingToolDirHandle?: FileSystemDirectoryHandle }) : undefined;
+        const handle = win?.__scriptingToolDirHandle;
+        if (handle) {
+          try {
+            const dir = await handle.getDirectoryHandle("scripting-tool", { create: true });
+            const projectDir = await dir.getDirectoryHandle(id, { create: true });
+            const fileName = `scene-${fragmentIndex}-${thumb.id}.png`;
+            const file = await projectDir.getFileHandle(fileName, { create: true });
+            const w = await file.createWritable();
+            const buf = Uint8Array.from(atob(data.imageBase64), (c) => c.charCodeAt(0));
+            await w.write(buf);
+            await w.close();
+            await setLocalThumbPath(thumb.id, `${id}/${fileName}`, fileName);
+          } catch (e) {
+            console.warn("No se pudo guardar escena en carpeta:", e);
+          }
+        }
+      }
+      setProject((prev) =>
+        prev
+          ? {
+              ...prev,
+              thumbnails: [{ ...thumb, blobUrl: thumb.blobUrl, fragmentIndex: thumb.fragmentIndex }, ...prev.thumbnails],
+            }
+          : prev
+      );
+    } catch (e) {
+      setSceneImageError(e instanceof Error ? e.message : "Error");
+    } finally {
+      setSceneImageLoading(null);
+    }
+  }
 
   return (
     <div className="p-8 max-w-4xl">
@@ -279,18 +456,18 @@ export default function ProjectDetailPage() {
         ))}
       </div>
 
-      {/* Selector de modelo y preset */}
+      {/* Selector de modelo (curado para script) y preset */}
       <div className="rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--bg-surface))] p-4 mb-6 flex flex-wrap gap-4 items-end">
         <div className="flex-1 min-w-[220px]">
           <label className="block text-xs font-medium text-[rgb(var(--text-muted))] mb-1">
-            Modelo de IA
+            Modelo de IA (guion) — hay opciones gratuitas
           </label>
           <select
             value={modelId}
             onChange={(e) => setModelId(e.target.value)}
             className="w-full rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--bg-muted))] px-3 py-2 text-[rgb(var(--text-primary))] focus:outline-none focus:ring-2 focus:ring-[rgb(var(--accent))]"
           >
-            {(aiModels.length ? aiModels : AI_MODELS.map((m) => ({ id: m.id, name: m.name, provider: m.provider, costTier: m.costTier, openRouterId: null }))).map((m) => {
+            {modelsForScriptDropdown.map((m) => {
               const value = m.openRouterId || m.id;
               const label = m.costTier === "free" ? `${m.name} (gratis)` : m.costTier === "low" ? `${m.name} (económico)` : m.provider === "openrouter" ? `${m.name} (OpenRouter)` : m.name;
               return (
@@ -390,38 +567,44 @@ export default function ProjectDetailPage() {
           <div className="rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--bg-surface))] overflow-hidden">
             <div className="px-4 py-3 border-b border-[rgb(var(--border))] bg-[rgb(var(--bg-muted))]">
               <h2 className="font-medium text-[rgb(var(--text-primary))]">
-                Scripts guardados en este proyecto
+                Escenas del guion
               </h2>
               <p className="text-xs text-[rgb(var(--text-muted))]">
-                Cada vez que generas un script, se guarda aquí. El más reciente
-                aparece primero.
+                Tras generar el script, se muestra en formato por escena: fragmentos de 15–21 palabras, con número, texto, palabras y botón para copiar bloques de 5. Puedes generar imagen/video por escena.
               </p>
             </div>
-            <div className="p-4 max-h-[420px] overflow-y-auto">
-              {generatedScript && !latestScript && (
-                <div className="rounded-lg bg-[rgb(var(--accent-soft))] p-4 mb-4">
-                  <p className="text-sm font-medium text-[rgb(var(--accent))] mb-1">
-                    Última generación (script)
-                  </p>
-                  <pre className="whitespace-pre-wrap font-sans text-[rgb(var(--text-primary))] text-sm">
-                    {generatedScript}
-                  </pre>
-                </div>
-              )}
-              {latestScript && (
-                <div className="space-y-4">
-                  <div className="rounded-lg bg-[rgb(var(--bg-muted))] p-3 text-xs text-[rgb(var(--text-muted))] flex flex-wrap gap-x-4 gap-y-1">
-                    <span>Versión más reciente · {latestScript.aiModel ?? "IA"} · {new Date(latestScript.createdAt).toLocaleString("es")}</span>
-                    <span className="text-[rgb(var(--text-secondary))]">
-                      {countWords(latestScript.content).toLocaleString()} palabras · ~{estimatedMinutes(countWords(latestScript.content))} min
-                    </span>
+            <div className="p-4">
+              {scriptContentForFragments ? (
+                <>
+                  {(latestScript || generatedScript) && (
+                    <div className="rounded-lg bg-[rgb(var(--bg-muted))] p-3 text-xs text-[rgb(var(--text-muted))] flex flex-wrap gap-x-4 gap-y-1 mb-4">
+                      <span>Versión más reciente · {latestScript?.aiModel ?? "IA"} · {latestScript ? new Date(latestScript.createdAt).toLocaleString("es") : "Sin guardar aún"}</span>
+                      <span className="text-[rgb(var(--text-secondary))]">
+                        {countWords(scriptContentForFragments).toLocaleString()} palabras · ~{estimatedMinutes(countWords(scriptContentForFragments))} min
+                      </span>
+                    </div>
+                  )}
+                  {sceneImageError && (
+                    <p className="text-sm text-red-600 dark:text-red-400 mb-2">{sceneImageError}</p>
+                  )}
+                  <div className="overflow-x-auto max-h-[520px] overflow-y-auto">
+                    <ScriptFragmentsTable
+                      scriptContent={scriptContentForFragments}
+                      sceneImageModelId={sceneImageModelId}
+                      onSceneImageModelChange={setSceneImageModelId}
+                      onGenerateScene={handleGenerateScene}
+                      sceneImages={(() => {
+                        const map: Record<number, { id: string; blobUrl: string }> = {};
+                        project.thumbnails.forEach((t) => {
+                          if (t.fragmentIndex != null) map[t.fragmentIndex] = { id: t.id, blobUrl: t.blobUrl };
+                        });
+                        return map;
+                      })()}
+                      sceneLoadingIndex={sceneImageLoading}
+                    />
                   </div>
-                  <pre className="whitespace-pre-wrap font-sans text-[rgb(var(--text-primary))] text-sm">
-                    {latestScript.content}
-                  </pre>
-                </div>
-              )}
-              {!latestScript && !generatedScript && (
+                </>
+              ) : (
                 <p className="text-[rgb(var(--text-muted))]">
                   Aún no hay scripts. Escribe un tema y pulsa &quot;Generar script&quot;.
                 </p>
@@ -501,6 +684,53 @@ export default function ProjectDetailPage() {
         </div>
       )}
 
+      {tab === "tags" && (
+        <div className="space-y-6">
+          <div className="rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--bg-surface))] p-4">
+            <p className="text-sm text-[rgb(var(--text-secondary))] mb-2">
+              Etiquetas con alto potencial de búsqueda para el video (SEO). Se usan el título y, si existe, el script para afinar términos y tendencias.
+            </p>
+            <button
+              type="button"
+              onClick={() => handleGenerate("tags")}
+              disabled={loading}
+              className="rounded-lg bg-[rgb(var(--accent))] px-4 py-2.5 text-white font-medium hover:opacity-90 disabled:opacity-50 flex items-center gap-2"
+            >
+              {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+              Generar etiquetas con IA
+            </button>
+            {generatedTags.length > 0 && (
+              <div className="mt-4 rounded-lg bg-[rgb(var(--bg-muted))] p-4">
+                <p className="text-xs font-medium text-[rgb(var(--text-muted))] mb-2">
+                  Copia y pega en YouTube (máx. 500 caracteres en total). Clic en una etiqueta para copiarla.
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {generatedTags.map((tag, i) => (
+                    <button
+                      key={i}
+                      type="button"
+                      onClick={() => {
+                        void navigator.clipboard.writeText(tag);
+                      }}
+                      className="rounded-md border border-[rgb(var(--border))] bg-[rgb(var(--bg-surface))] px-2.5 py-1 text-sm text-[rgb(var(--text-primary))] hover:bg-[rgb(var(--accent-soft))] hover:border-[rgb(var(--accent))]"
+                    >
+                      {tag}
+                    </button>
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void navigator.clipboard.writeText(generatedTags.join(", "))}
+                  className="mt-3 text-xs text-[rgb(var(--accent))] hover:underline"
+                >
+                  Copiar todas
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {tab === "thumbnail" && (
         <div className="space-y-6">
           <div className="rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--bg-surface))] p-4">
@@ -508,9 +738,35 @@ export default function ProjectDetailPage() {
               Generar miniatura viral con IA (OpenRouter)
             </h3>
             <p className="text-xs text-[rgb(var(--text-muted))] mb-4">
-              La miniatura es clave para el CTR. Especifica colores y estilo para que la IA genere una imagen 16:9 optimizada para YouTube.
+              La miniatura es clave para el CTR. Usa Nano Banana o Grok para imágenes estáticas 16:9 optimizadas para YouTube.
             </p>
             <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-medium text-[rgb(var(--text-muted))] mb-1">Estilo de texto (competencia)</label>
+                <select
+                  value={thumbWordStyle}
+                  onChange={(e) => setThumbWordStyle(e.target.value as "preset" | "few" | "many")}
+                  className="w-full rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--bg-muted))] px-3 py-2 text-[rgb(var(--text-primary))] focus:outline-none focus:ring-2 focus:ring-[rgb(var(--accent))]"
+                >
+                  <option value="preset">Según preset (si tiene thumbnailWordStyle)</option>
+                  <option value="few">Pocas palabras (2-4) — miniatura impactante</option>
+                  <option value="many">Muchas palabras (5-8) — estilo más texto</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-[rgb(var(--text-muted))] mb-1">Modelo de imagen</label>
+                <select
+                  value={thumbImageModelId}
+                  onChange={(e) => setThumbImageModelId(e.target.value)}
+                  className="w-full rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--bg-muted))] px-3 py-2 text-[rgb(var(--text-primary))] focus:outline-none focus:ring-2 focus:ring-[rgb(var(--accent))]"
+                >
+                  {THUMBNAIL_IMAGE_MODELS.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.name} {m.note ? `(${m.note})` : ""}
+                    </option>
+                  ))}
+                </select>
+              </div>
               <div>
                 <label className="block text-xs font-medium text-[rgb(var(--text-muted))] mb-1">Título o concepto (para la imagen)</label>
                 <input
@@ -555,23 +811,45 @@ export default function ProjectDetailPage() {
               </button>
             </div>
             <p className="text-xs text-[rgb(var(--text-muted))] mt-3">
-              Se usa OpenRouter (ej. FLUX). Requiere OPENROUTER_API_KEY y BLOB_READ_WRITE_TOKEN. Ver CONFIGURACION.md.
+              Nano Banana y Grok son los modelos recomendados para miniaturas. En Configuración eliges guardar en la nube (Cloudinary) o en tu carpeta local.
             </p>
+            {storageMode === "local" && localFolderName && (
+              <div className="mt-3 rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--bg-muted))] px-3 py-2">
+                <p className="text-xs font-medium text-[rgb(var(--text-primary))] mb-0.5">Carpeta de assets de este proyecto</p>
+                <p className="text-xs text-[rgb(var(--text-muted))] break-all">
+                  {localFolderName} → scripting-tool → {id}
+                </p>
+                <p className="text-xs text-[rgb(var(--text-muted))] mt-1">
+                  Abre la carpeta <strong>{localFolderName}</strong> en tu Mac (Finder) y entra en <strong>scripting-tool</strong> → <strong>{id}</strong> para ver los PNG guardados.
+                </p>
+              </div>
+            )}
           </div>
           {project.thumbnails.length > 0 && (
             <div>
               <h3 className="text-sm font-medium text-[rgb(var(--text-primary))] mb-2">Miniaturas generadas</h3>
               <div className="flex flex-wrap gap-4">
                 {project.thumbnails.map((t) => (
-                  <a
+                  <div
                     key={t.id}
-                    href={t.blobUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="rounded-lg overflow-hidden border border-[rgb(var(--border))] hover:ring-2 hover:ring-[rgb(var(--accent))]"
+                    className="rounded-lg overflow-hidden border border-[rgb(var(--border))] p-2 hover:ring-2 hover:ring-[rgb(var(--accent))]"
                   >
-                    <img src={t.blobUrl} alt="Miniatura" className="h-32 w-auto object-cover" />
-                  </a>
+                    {t.blobUrl.startsWith(LOCAL_URL_PREFIX) ? (
+                      <LocalThumbnailWithPath
+                        thumbId={t.id}
+                        blobUrl={t.blobUrl}
+                        projectId={id}
+                        alt="Miniatura"
+                        className="h-32 w-auto object-cover rounded"
+                      />
+                    ) : (
+                      <>
+                        <a href={t.blobUrl} target="_blank" rel="noopener noreferrer">
+                          <img src={t.blobUrl} alt="Miniatura" className="h-32 w-auto object-cover rounded" />
+                        </a>
+                      </>
+                    )}
+                  </div>
                 ))}
               </div>
             </div>

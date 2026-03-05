@@ -11,7 +11,8 @@ Incluye análisis de canal (estilo [Scripzy](https://scripzy.app/script-lab)): a
 - **Flujo claro**: Proyecto → pestañas Script / Título / Descripción / Miniatura. Los scripts generados **se guardan en el proyecto** y se listan en la pestaña Script (siempre sabes dónde está cada script).
 - **Presets**: Creados desde el análisis de canal para dar tono, formato y contexto a la IA.
 - **Auth**: Clerk (Google y preparado para wallets en el futuro).
-- **Almacenamiento**: Scripts y metadatos en PostgreSQL; opcional **Vercel Blob** (o Cloudinary) para miniaturas y blobs.
+- **Almacenamiento**: Scripts y metadatos en PostgreSQL. Miniaturas: **Cloudinary** (nube) o **local** (carpeta en tu computadora, PWA).
+- **PWA**: Instalable como app; en Configuración eliges si guardar en la nube o en una carpeta local.
 
 ## Requisitos
 
@@ -21,7 +22,7 @@ Incluye análisis de canal (estilo [Scripzy](https://scripzy.app/script-lab)): a
   - Clerk (Google sign-in)
   - Al menos un proveedor de IA: OpenAI, Anthropic, DeepSeek y/o Google AI
   - YouTube Data API v3 (para análisis de canal)
-  - Opcional: Vercel Blob (`BLOB_READ_WRITE_TOKEN`) para almacenar archivos
+  - Opcional: Cloudinary (`CLOUDINARY_*`) para miniaturas en la nube; o usa modo Local en la app
   - Opcional: Hugging Face (TTS / voces)
 
 ## Instalación
@@ -54,7 +55,7 @@ Incluye análisis de canal (estilo [Scripzy](https://scripzy.app/script-lab)): a
    - `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` y `CLERK_SECRET_KEY`
    - `YOUTUBE_API_KEY` (para análisis de canal)
    - Al menos una de: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY`, `GOOGLE_AI_API_KEY`
-   - Opcional: `BLOB_READ_WRITE_TOKEN` (Vercel Blob)
+   - Opcional: `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET` (miniaturas en nube)
    - Opcional: `HUGGINGFACE_API_KEY` (para TTS/voces)
 
 4. **Prisma**
@@ -85,14 +86,14 @@ Puedes usar solo la DB y añadir Blob o Cloudinary cuando implementes la generac
 
 - `src/app`: App Router (landing, auth, dashboard, proyectos, canal).
 - `src/app/api`: API routes (canal/analyze, presets, projects, script/generate).
-- `src/lib`: DB (Prisma), IA (providers), YouTube (análisis), blob, utils.
+- `src/lib`: DB (Prisma), IA (providers), YouTube (análisis), storage (Cloudinary/local), utils.
 - `src/types`: Tipos (modelos de IA).
 - `prisma/schema.prisma`: Modelos User, Channel, Preset, Project, Script, Thumbnail.
 - `docker-compose.yml`: PostgreSQL para desarrollo local con Podman/Docker.
 
 ## Próximos pasos sugeridos
 
-- **Miniaturas con IA**: Endpoint para generar/subir miniaturas y guardar URL en `Thumbnail` (Vercel Blob o Cloudinary).
+- **Miniaturas con IA**: Generación con OpenRouter (ej. FLUX); almacenamiento en Cloudinary o en carpeta local (PWA).
 - **Librería de voces**: Integrar Hugging Face TTS (p. ej. SpeechT5 o XTTS) para previsualizar o exportar el script con voz.
 - **Wallets**: Usar Clerk para conectar wallets y preparar flujos de pago.
 
