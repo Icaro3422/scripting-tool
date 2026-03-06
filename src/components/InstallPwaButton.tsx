@@ -1,33 +1,57 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Download, X, Smartphone, Monitor } from "lucide-react";
+import { useEffect, useState, useCallback } from "react";
+import { Download, X, Smartphone, Monitor, Loader2 } from "lucide-react";
+
+type DeferredPrompt = { prompt: () => Promise<{ outcome: string }> };
+
+declare global {
+  interface Window {
+    __deferredInstallPrompt?: DeferredPrompt;
+  }
+}
 
 export function InstallPwaButton() {
-  const [deferredPrompt, setDeferredPrompt] = useState<{ prompt: () => Promise<{ outcome: string }> } | null>(null);
+  const [deferredPrompt, setDeferredPrompt] = useState<DeferredPrompt | null>(null);
   const [installed, setInstalled] = useState(false);
   const [showInstructions, setShowInstructions] = useState(false);
+  const [isPrompting, setIsPrompting] = useState(false);
 
   useEffect(() => {
+    const win = typeof window === "undefined" ? null : window;
+    if (!win) return;
+    if (win.matchMedia("(display-mode: standalone)").matches || (win.navigator as unknown as { standalone?: boolean }).standalone) {
+      setInstalled(true);
+      return;
+    }
+    const stored = win.__deferredInstallPrompt;
+    if (stored) setDeferredPrompt(stored);
     const handler = (e: Event) => {
       e.preventDefault();
-      setDeferredPrompt(e as unknown as { prompt: () => Promise<{ outcome: string }> });
+      const p = e as unknown as DeferredPrompt;
+      win.__deferredInstallPrompt = p;
+      setDeferredPrompt(p);
     };
-    window.addEventListener("beforeinstallprompt", handler);
-    if (window.matchMedia("(display-mode: standalone)").matches || (window.navigator as unknown as { standalone?: boolean }).standalone) {
-      setInstalled(true);
-    }
-    return () => window.removeEventListener("beforeinstallprompt", handler);
+    win.addEventListener("beforeinstallprompt", handler);
+    return () => win.removeEventListener("beforeinstallprompt", handler);
   }, []);
 
-  async function handleInstall() {
-    if (deferredPrompt) {
-      const { outcome } = await deferredPrompt.prompt();
-      if (outcome === "accepted") setInstalled(true);
+  const handleInstall = useCallback(async () => {
+    const prompt = deferredPrompt ?? (typeof window !== "undefined" ? window.__deferredInstallPrompt : null);
+    if (prompt) {
+      setIsPrompting(true);
+      try {
+        const { outcome } = await prompt.prompt();
+        if (outcome === "accepted") setInstalled(true);
+      } catch {
+        setShowInstructions(true);
+      } finally {
+        setIsPrompting(false);
+      }
       return;
     }
     setShowInstructions(true);
-  }
+  }, [deferredPrompt]);
 
   if (installed) return null;
 
@@ -36,10 +60,15 @@ export function InstallPwaButton() {
       <button
         type="button"
         onClick={handleInstall}
-        className="inline-flex items-center gap-2 rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--bg-surface))] px-4 py-2.5 text-sm font-medium text-[rgb(var(--text-primary))] hover:bg-[rgb(var(--bg-muted))] transition"
+        disabled={isPrompting}
+        className="inline-flex items-center gap-2 rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--bg-surface))] px-4 py-2.5 text-sm font-medium text-[rgb(var(--text-primary))] hover:bg-[rgb(var(--bg-muted))] transition disabled:opacity-70 disabled:pointer-events-none"
       >
-        <Download className="h-4 w-4" />
-        Instalar app
+        {isPrompting ? (
+          <Loader2 className="h-4 w-4 animate-spin" />
+        ) : (
+          <Download className="h-4 w-4" />
+        )}
+        {isPrompting ? "Abriendo instalación…" : "Instalar app"}
       </button>
 
       {showInstructions && (
@@ -59,7 +88,7 @@ export function InstallPwaButton() {
               </button>
             </div>
             <p className="text-sm text-[rgb(var(--text-secondary))] mb-4">
-              Tu navegador no mostró el diálogo de instalación. Puedes instalar manualmente:
+              {deferredPrompt ? "Si no se abrió el diálogo, instala desde el menú del navegador:" : "En este navegador la instalación se hace desde el menú:"}
             </p>
             <ul className="space-y-3 text-sm text-[rgb(var(--text-primary))]">
               <li className="flex gap-3">
@@ -76,7 +105,7 @@ export function InstallPwaButton() {
               </li>
             </ul>
             <p className="text-xs text-[rgb(var(--text-muted))] mt-4">
-              Si no ves la opción, usa la app en el navegador; funciona igual. Asegúrate de estar en <strong>HTTPS</strong> para que la instalación esté disponible.
+              Usa <strong>HTTPS</strong>. Si no ves la opción, la app funciona igual en el navegador.
             </p>
           </div>
         </div>

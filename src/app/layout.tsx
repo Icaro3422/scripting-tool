@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { ClerkProvider } from "@clerk/nextjs";
 import "./globals.css";
+import { RegisterSw } from "@/components/RegisterSw";
 
 export const metadata: Metadata = {
   title: "Scripting Tool – Producción YouTube con IA",
@@ -20,7 +21,15 @@ export default function RootLayout({
 }>) {
   const body = (
     <html lang="es" suppressHydrationWarning>
-      <body className="min-h-screen antialiased">{children}</body>
+      <body className="min-h-screen antialiased">
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `(function(){function c(e){e.preventDefault();if(!window.__deferredInstallPrompt)window.__deferredInstallPrompt=e;}window.addEventListener("beforeinstallprompt",c);})();`,
+          }}
+        />
+        <RegisterSw />
+        {children}
+      </body>
     </html>
   );
   return hasClerk ? <ClerkProvider>{body}</ClerkProvider> : body;
