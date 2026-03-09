@@ -3,7 +3,11 @@
 import { useEffect, useState, useCallback } from "react";
 import { Download, X, Smartphone, Monitor, Loader2 } from "lucide-react";
 
-type DeferredPrompt = { prompt: () => Promise<{ outcome: string }> };
+/** BeforeInstallPromptEvent: prompt() muestra el diálogo, userChoice devuelve la respuesta */
+type DeferredPrompt = {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: "accepted" | "dismissed"; platform: string }>;
+};
 
 declare global {
   interface Window {
@@ -37,11 +41,12 @@ export function InstallPwaButton() {
   }, []);
 
   const handleInstall = useCallback(async () => {
-    const prompt = deferredPrompt ?? (typeof window !== "undefined" ? window.__deferredInstallPrompt : null);
-    if (prompt) {
+    const evt = deferredPrompt ?? (typeof window !== "undefined" ? window.__deferredInstallPrompt : null);
+    if (evt) {
       setIsPrompting(true);
       try {
-        const { outcome } = await prompt.prompt();
+        evt.prompt();
+        const { outcome } = await evt.userChoice;
         if (outcome === "accepted") setInstalled(true);
       } catch {
         setShowInstructions(true);

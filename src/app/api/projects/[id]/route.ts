@@ -14,15 +14,58 @@ export async function GET(
     if (!user) return NextResponse.json({ error: "Usuario no encontrado" }, { status: 404 });
 
     const { id } = await params;
-    const project = await prisma.project.findFirst({
+    let project = await prisma.project.findFirst({
       where: { id, userId: user.id },
       include: {
         channel: true,
+        videos: {
+          orderBy: { updatedAt: "desc" },
+          include: {
+            scripts: { orderBy: { updatedAt: "desc" } },
+            thumbnails: { orderBy: { updatedAt: "desc" } },
+          },
+        },
         scripts: { orderBy: { updatedAt: "desc" } },
         thumbnails: { orderBy: { updatedAt: "desc" } },
       },
     });
     if (!project) return NextResponse.json({ error: "Proyecto no encontrado" }, { status: 404 });
+
+    if (project.videos.length === 0) {
+      const video = await prisma.video.create({
+        data: {
+          projectId: project.id,
+          title: project.scripts.length > 0 ? project.title : "Video 1",
+          description: project.description,
+          status: (project as { status?: string }).status ?? "draft",
+        },
+      });
+      if (project.scripts.length > 0 || project.thumbnails.length > 0) {
+        await prisma.script.updateMany({
+          where: { projectId: project.id },
+          data: { videoId: video.id, projectId: null },
+        });
+        await prisma.thumbnail.updateMany({
+          where: { projectId: project.id },
+          data: { videoId: video.id, projectId: null },
+        });
+      }
+      project = await prisma.project.findFirst({
+        where: { id, userId: user.id },
+        include: {
+          channel: true,
+          videos: {
+            orderBy: { updatedAt: "desc" },
+            include: {
+              scripts: { orderBy: { updatedAt: "desc" } },
+              thumbnails: { orderBy: { updatedAt: "desc" } },
+            },
+          },
+          scripts: true,
+          thumbnails: true,
+        },
+      })!;
+    }
     return NextResponse.json({ project });
   } catch (e: unknown) {
     console.error(e);
@@ -60,20 +103,47 @@ export async function PATCH(
     if (!project) return NextResponse.json({ error: "Proyecto no encontrado" }, { status: 404 });
 
     const body = await req.json();
-    const { title, description, status } = body as {
+    const {
+      title,
+      description,
+      status,
+      channelId,
+      contentStyle,
+      presetIds,
+      brandColors,
+      typography,
+      referenceImageUrls,
+    } = body as {
       title?: string;
       description?: string;
       status?: string;
+      channelId?: string | null;
+      contentStyle?: string;
+      presetIds?: string[];
+      brandColors?: string[];
+      typography?: string | null;
+      referenceImageUrls?: string[];
     };
+
+    const data: Record<string, unknown> = {};
+    if (title !== undefined) data.title = title;
+    if (description !== undefined) data.description = description;
+    if (status !== undefined) data.status = status;
+    if (channelId !== undefined) data.channelId = channelId || null;
+    if (contentStyle !== undefined) data.contentStyle = contentStyle;
+    if (presetIds !== undefined && Array.isArray(presetIds)) data.presetIds = presetIds;
+    if (brandColors !== undefined && Array.isArray(brandColors)) data.brandColors = brandColors;
+    if (typography !== undefined) data.typography = typography || null;
+    if (referenceImageUrls !== undefined && Array.isArray(referenceImageUrls))
+      data.referenceImageUrls = referenceImageUrls;
 
     const updated = await prisma.project.update({
       where: { id },
-      data: {
-        ...(title !== undefined && { title }),
-        ...(description !== undefined && { description }),
-        ...(status !== undefined && { status }),
+      data,
+      include: {
+        channel: true,
+        videos: { orderBy: { updatedAt: "desc" }, include: { scripts: true, thumbnails: true } },
       },
-      include: { channel: true, scripts: true, thumbnails: true },
     });
     return NextResponse.json({ project: updated });
   } catch (e: unknown) {

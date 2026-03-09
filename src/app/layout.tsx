@@ -7,7 +7,7 @@ export const metadata: Metadata = {
   title: "Scripting Tool – Producción YouTube con IA",
   description:
     "Scripting, miniatura, título y descripción para tus videos. Múltiples modelos de IA. Presets desde tu canal.",
-  manifest: "/manifest.json",
+  manifest: "/manifest.webmanifest",
   appleWebApp: { capable: true, title: "Scripting Tool" },
 };
 

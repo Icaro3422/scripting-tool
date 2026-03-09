@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { prisma } from "@/lib/db";
 import { getStorageProvider, getStorageAvailability } from "@/lib/storage";
+import { recordUsageAndDeduct } from "@/lib/billing";
 
 const OPENROUTER_KEY = process.env.OPENROUTER_API_KEY;
 const DEFAULT_IMAGE_MODEL = "google/gemini-2.5-flash-image";
@@ -54,7 +55,8 @@ export async function POST(req: NextRequest) {
 
     const body = await req.json();
     const {
-      projectId,
+      projectId: projectIdParam,
+      videoId,
       title,
       colors = "",
       referenceHint = "",
@@ -63,14 +65,14 @@ export async function POST(req: NextRequest) {
       presetId,
       thumbnailWordStyle: bodyWordStyle,
     } = body as {
-      projectId: string;
+      projectId?: string;
+      videoId?: string;
       title: string;
       colors?: string;
       referenceHint?: string;
       modelId?: string;
       storageMode?: "cloud" | "local";
       presetId?: string;
-      /** "few" = pocas palabras (2-4), "many" = muchas palabras (5-8). Si no se envía, se usa preset. */
       thumbnailWordStyle?: "few" | "many";
     };
 
@@ -86,9 +88,9 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    if (!projectId || !title || typeof title !== "string") {
+    if ((!projectIdParam && !videoId) || !title || typeof title !== "string") {
       return NextResponse.json(
-        { error: "projectId y title son requeridos" },
+        { error: "projectId o videoId, y title son requeridos" },
         { status: 400 }
       );
     }
@@ -98,11 +100,21 @@ export async function POST(req: NextRequest) {
       user = await prisma.user.create({ data: { clerkId: userId } });
     }
 
-    const project = await prisma.project.findFirst({
-      where: { id: projectId, userId: user.id },
-    });
-    if (!project) {
-      return NextResponse.json({ error: "Proyecto no encontrado" }, { status: 404 });
+    let projectId: string;
+    let targetVideoId: string | null = null;
+    if (videoId) {
+      const v = await prisma.video.findFirst({
+        where: { id: videoId, project: { userId: user.id } },
+      });
+      if (!v) return NextResponse.json({ error: "Video no encontrado" }, { status: 404 });
+      projectId = v.projectId;
+      targetVideoId = v.id;
+    } else {
+      const p = await prisma.project.findFirst({
+        where: { id: projectIdParam!, userId: user.id },
+      });
+      if (!p) return NextResponse.json({ error: "Proyecto no encontrado" }, { status: 404 });
+      projectId = p.id;
     }
 
     let thumbnailWordStyle: "few" | "many" | undefined =
@@ -154,7 +166,18 @@ export async function POST(req: NextRequest) {
           images?: Array<{ image_url?: { url?: string }; imageUrl?: { url?: string } }>;
         };
       }[];
+      usage?: { prompt_tokens?: number; completion_tokens?: number };
     };
+    const inputTokens = data.usage?.prompt_tokens ?? 500;
+    const outputTokens = data.usage?.completion_tokens ?? 500;
+    await recordUsageAndDeduct({
+      userId: user.id,
+      operationType: "thumbnail",
+      provider: "openrouter",
+      model: modelId || DEFAULT_IMAGE_MODEL,
+      inputTokens,
+      outputTokens,
+    });
     const firstImage = data.choices?.[0]?.message?.images?.[0];
     const imageUrl = firstImage?.image_url?.url ?? (firstImage as { imageUrl?: { url?: string } })?.imageUrl?.url;
     if (!imageUrl || !imageUrl.startsWith("data:")) {
@@ -172,7 +195,8 @@ export async function POST(req: NextRequest) {
       const thumbnail = await prisma.thumbnail.create({
         data: {
           userId: user.id,
-          projectId,
+          videoId: targetVideoId,
+          projectId: targetVideoId ? null : projectId,
           blobUrl: `${LOCAL_PREFIX}temp-${Date.now()}`,
           prompt,
           aiProvider: "openrouter",
@@ -182,10 +206,11 @@ export async function POST(req: NextRequest) {
         where: { id: thumbnail.id },
         data: { blobUrl: `${LOCAL_PREFIX}${thumbnail.id}` },
       });
-      await prisma.project.update({
-        where: { id: projectId },
-        data: { status: "thumbnail_ready" },
-      });
+      if (targetVideoId) {
+        await prisma.video.update({ where: { id: targetVideoId }, data: { status: "thumbnail_ready" } });
+      } else {
+        await prisma.project.update({ where: { id: projectId }, data: { status: "thumbnail_ready" } });
+      }
       return NextResponse.json({
         thumbnail: { ...thumbnail, blobUrl: `${LOCAL_PREFIX}${thumbnail.id}` },
         imageBase64: base64,
@@ -205,21 +230,24 @@ export async function POST(req: NextRequest) {
     const thumbnail = await prisma.thumbnail.create({
       data: {
         userId: user.id,
-        projectId,
+        videoId: targetVideoId,
+        projectId: targetVideoId ? null : projectId,
         blobUrl,
         prompt,
         aiProvider: "openrouter",
       },
     });
 
-    await prisma.project.update({
-      where: { id: projectId },
-      data: { status: "thumbnail_ready" },
-    });
+    if (targetVideoId) {
+      await prisma.video.update({ where: { id: targetVideoId }, data: { status: "thumbnail_ready" } });
+    } else {
+      await prisma.project.update({ where: { id: projectId }, data: { status: "thumbnail_ready" } });
+    }
 
     return NextResponse.json({ thumbnail, blobUrl });
   } catch (e: unknown) {
     console.error(e);
+    const msg = e instanceof Error ? e.message : "Error al generar miniatura";
     const isPrismaTableMissing =
       typeof e === "object" && e !== null && (e as { code?: string }).code === "P2021";
     if (isPrismaTableMissing) {
@@ -232,9 +260,9 @@ export async function POST(req: NextRequest) {
         { status: 503 }
       );
     }
-    return NextResponse.json(
-      { error: e instanceof Error ? e.message : "Error al generar miniatura" },
-      { status: 500 }
-    );
+    if (msg.includes("Saldo insuficiente")) {
+      return NextResponse.json({ error: msg, code: "INSUFFICIENT_BALANCE" }, { status: 402 });
+    }
+    return NextResponse.json({ error: msg }, { status: 500 });
   }
 }

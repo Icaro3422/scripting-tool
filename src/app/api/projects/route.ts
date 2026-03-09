@@ -14,8 +14,14 @@ export async function GET() {
       where: { userId: user.id },
       include: {
         channel: true,
-        scripts: { orderBy: { updatedAt: "desc" }, take: 1 },
-        thumbnails: { orderBy: { updatedAt: "desc" }, take: 1 },
+        videos: {
+          orderBy: { updatedAt: "desc" },
+          include: {
+            scripts: { orderBy: { updatedAt: "desc" }, take: 1 },
+            thumbnails: { take: 5 },
+          },
+        },
+        _count: { select: { videos: true } },
       },
       orderBy: { updatedAt: "desc" },
     });
@@ -64,8 +70,11 @@ export async function POST(req: NextRequest) {
         channelId: channelId ?? null,
         title,
         description: description ?? null,
+        videos: {
+          create: { title: "Video 1", status: "draft" },
+        },
       },
-      include: { channel: true },
+      include: { channel: true, videos: true },
     });
     return NextResponse.json({ project });
   } catch (e: unknown) {

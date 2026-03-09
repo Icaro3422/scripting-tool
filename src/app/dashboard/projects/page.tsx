@@ -4,13 +4,19 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { FolderOpen, ChevronRight } from "lucide-react";
 
+interface Video {
+  id: string;
+  updatedAt: string;
+  scripts: { id: string }[];
+  thumbnails: { id: string }[];
+}
+
 interface Project {
   id: string;
   title: string;
   status: string;
   updatedAt: string;
-  scripts: { id: string }[];
-  thumbnails: { id: string }[];
+  videos: Video[];
 }
 
 export default function ProjectsPage() {
@@ -71,8 +77,9 @@ export default function ProjectsPage() {
                       {p.title}
                     </p>
                     <p className="text-sm text-[rgb(var(--text-muted))]">
-                      {p.scripts.length > 0 && "Script · "}
-                      {p.thumbnails.length > 0 && "Miniatura · "}
+                      {p.videos?.length > 0 && `${p.videos.length} video${p.videos.length !== 1 ? "s" : ""} · `}
+                      {p.videos?.some((v) => (v.scripts?.length ?? 0) > 0) && "Script · "}
+                      {p.videos?.some((v) => (v.thumbnails?.length ?? 0) > 0) && "Miniatura · "}
                       {new Date(p.updatedAt).toLocaleDateString("es")}
                     </p>
                   </div>

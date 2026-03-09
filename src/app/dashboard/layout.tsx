@@ -1,6 +1,6 @@
 import { UserButton } from "@clerk/nextjs";
 import Link from "next/link";
-import { LayoutDashboard, FolderOpen, Mic, Layers, Volume2, Settings } from "lucide-react";
+import { LayoutDashboard, FolderOpen, Mic, Layers, Volume2, Settings, CreditCard } from "lucide-react";
 
 const clerkKey = process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
 const hasClerk = !!clerkKey && clerkKey.startsWith("pk_") && !clerkKey.includes("placeholder");
@@ -54,6 +54,13 @@ export default function DashboardLayout({
           >
             <Volume2 className="h-4 w-4" />
             Voces
+          </Link>
+          <Link
+            href="/dashboard/billing"
+            className="flex items-center gap-2 rounded-lg px-3 py-2 text-[rgb(var(--text-secondary))] hover:bg-[rgb(var(--bg-muted))] hover:text-[rgb(var(--text-primary))]"
+          >
+            <CreditCard className="h-4 w-4" />
+            Facturación
           </Link>
           <Link
             href="/dashboard/settings"

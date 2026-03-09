@@ -7,6 +7,8 @@ export type Message = { role: "user" | "assistant" | "system"; content: string }
 
 export type ChatCompletionOptions = { max_tokens?: number };
 
+export type UsageInfo = { prompt_tokens: number; completion_tokens: number };
+
 function getOpenAI(): OpenAI | null {
   const key = process.env.OPENAI_API_KEY;
   if (!key) return null;
@@ -125,9 +127,12 @@ export async function chatCompletion(
     if (!res.ok) {
       throw new Error(`OpenRouter: ${res.status} ${raw.slice(0, 200)}`);
     }
-    let data: { choices?: { message?: { content?: string } }[] };
+    let data: {
+      choices?: { message?: { content?: string } }[];
+      usage?: { prompt_tokens?: number; completion_tokens?: number };
+    };
     try {
-      data = JSON.parse(raw) as { choices?: { message?: { content?: string } }[] };
+      data = JSON.parse(raw);
     } catch {
       throw new Error(`OpenRouter devolvió una respuesta no válida. Prueba otro modelo.`);
     }
@@ -135,4 +140,61 @@ export async function chatCompletion(
   }
 
   throw new Error(`Proveedor no soportado: ${provider}`);
+}
+
+/**
+ * Igual que chatCompletion pero devuelve también usage cuando está disponible (OpenRouter).
+ * Para otros proveedores, usage puede ser undefined.
+ */
+export async function chatCompletionWithUsage(
+  provider: AIProviderId,
+  model: string,
+  messages: Message[],
+  options?: ChatCompletionOptions
+): Promise<{ content: string; usage?: UsageInfo }> {
+  const systemMessage = messages.find((m) => m.role === "system");
+  const rest = messages.filter((m) => m.role !== "system");
+  const maxTokens = options?.max_tokens ?? 4096;
+
+  if (provider === "openrouter") {
+    const key = process.env.OPENROUTER_API_KEY;
+    if (!key) throw new Error("OPENROUTER_API_KEY no configurada.");
+    const modelId = model.includes("/") ? model : `openrouter/${model}`;
+    const list = systemMessage
+      ? [{ role: "system" as const, content: systemMessage.content }, ...rest]
+      : rest;
+    const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${key}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000",
+      },
+      body: JSON.stringify({
+        model: modelId,
+        messages: list.map((m) => ({ role: m.role, content: m.content })),
+        max_tokens: maxTokens,
+      }),
+    });
+    const raw = await res.text();
+    if (!res.ok) throw new Error(`OpenRouter: ${res.status} ${raw.slice(0, 200)}`);
+    let data: {
+      choices?: { message?: { content?: string } }[];
+      usage?: { prompt_tokens?: number; completion_tokens?: number };
+    };
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      throw new Error(`OpenRouter devolvió una respuesta no válida.`);
+    }
+    const content = data.choices?.[0]?.message?.content ?? "";
+    const usage =
+      data.usage?.prompt_tokens != null && data.usage?.completion_tokens != null
+        ? { prompt_tokens: data.usage.prompt_tokens, completion_tokens: data.usage.completion_tokens }
+        : undefined;
+    return { content, usage };
+  }
+
+  const content = await chatCompletion(provider, model, messages, options);
+  return { content };
 }

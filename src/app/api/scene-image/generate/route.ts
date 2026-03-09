@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { prisma } from "@/lib/db";
 import { getStorageProvider, getStorageAvailability } from "@/lib/storage";
+import { recordUsageAndDeduct } from "@/lib/billing";
 
 const OPENROUTER_KEY = process.env.OPENROUTER_API_KEY;
 const DEFAULT_IMAGE_MODEL = "black-forest-labs/flux.2-pro";
@@ -10,14 +11,18 @@ const LOCAL_PREFIX = "local://";
 /**
  * Construye un prompt detallado para que la IA genere la imagen de una escena del guion.
  * El texto del fragmento es la narración; la imagen debe representar visualmente ese momento.
+ * Si hay imagen de referencia, se añade instrucción en el prompt (la imagen se envía aparte en content).
  */
-function buildSceneImagePrompt(sceneText: string): string {
+function buildSceneImagePrompt(sceneText: string, hasReferenceImage: boolean): string {
   const clean = sceneText.replace(/\s+/g, " ").trim().slice(0, 800);
+  const styleInstruction = hasReferenceImage
+    ? "Match the visual style, colors, lighting, and mood of the reference image provided. Keep consistency with that aesthetic."
+    : "Style: cinematic, 16:9 aspect ratio, high quality, detailed visual.";
   return [
     "Single frame for a video. This is one scene from a script.",
     "Scene description (what is being said or shown at this moment):",
     clean,
-    "Style: cinematic, 16:9 aspect ratio, high quality, detailed visual. Depict the scene clearly: characters, setting, actions, or mood as described. No text overlay, no watermarks, no logos. Photorealistic or polished illustration.",
+    `${styleInstruction} Depict the scene clearly: characters, setting, actions, or mood as described. No text overlay, no watermarks, no logos. Photorealistic or polished illustration.`,
   ].join("\n");
 }
 
@@ -35,22 +40,26 @@ export async function POST(req: NextRequest) {
 
     const body = await req.json();
     const {
-      projectId,
+      projectId: projectIdParam,
+      videoId,
       fragmentIndex,
       sceneText,
       modelId = DEFAULT_IMAGE_MODEL,
       storageMode = "cloud",
+      referenceImageBase64,
     } = body as {
-      projectId: string;
+      projectId?: string;
+      videoId?: string;
       fragmentIndex: number;
       sceneText: string;
       modelId?: string;
       storageMode?: "cloud" | "local";
+      referenceImageBase64?: string;
     };
 
-    if (!projectId || typeof fragmentIndex !== "number" || !sceneText || typeof sceneText !== "string") {
+    if ((!projectIdParam && !videoId) || typeof fragmentIndex !== "number" || !sceneText || typeof sceneText !== "string") {
       return NextResponse.json(
-        { error: "projectId, fragmentIndex y sceneText son requeridos" },
+        { error: "projectId o videoId, fragmentIndex y sceneText son requeridos" },
         { status: 400 }
       );
     }
@@ -66,14 +75,36 @@ export async function POST(req: NextRequest) {
     let user = await prisma.user.findUnique({ where: { clerkId: userId } });
     if (!user) user = await prisma.user.create({ data: { clerkId: userId } });
 
-    const project = await prisma.project.findFirst({
-      where: { id: projectId, userId: user.id },
-    });
-    if (!project) {
-      return NextResponse.json({ error: "Proyecto no encontrado" }, { status: 404 });
+    let projectId: string;
+    let targetVideoId: string | null = null;
+    if (videoId) {
+      const v = await prisma.video.findFirst({
+        where: { id: videoId, project: { userId: user.id } },
+      });
+      if (!v) return NextResponse.json({ error: "Video no encontrado" }, { status: 404 });
+      projectId = v.projectId;
+      targetVideoId = v.id;
+    } else {
+      const p = await prisma.project.findFirst({
+        where: { id: projectIdParam!, userId: user.id },
+      });
+      if (!p) return NextResponse.json({ error: "Proyecto no encontrado" }, { status: 404 });
+      projectId = p.id;
     }
 
-    const prompt = buildSceneImagePrompt(sceneText);
+    const hasReferenceImage = Boolean(
+      referenceImageBase64 &&
+      typeof referenceImageBase64 === "string" &&
+      referenceImageBase64.startsWith("data:image/")
+    );
+    const prompt = buildSceneImagePrompt(sceneText, hasReferenceImage);
+
+    const content: Array<{ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } }> = [
+      { type: "text", text: prompt },
+    ];
+    if (hasReferenceImage && referenceImageBase64) {
+      content.push({ type: "image_url", image_url: { url: referenceImageBase64 as string } });
+    }
 
     const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
@@ -84,7 +115,7 @@ export async function POST(req: NextRequest) {
       },
       body: JSON.stringify({
         model: modelId || DEFAULT_IMAGE_MODEL,
-        messages: [{ role: "user", content: prompt }],
+        messages: [{ role: "user", content }],
         modalities: ["image", "text"],
         image_config: { aspect_ratio: "16:9" },
       }),
@@ -105,7 +136,19 @@ export async function POST(req: NextRequest) {
           images?: Array<{ image_url?: { url?: string }; imageUrl?: { url?: string } }>;
         };
       }[];
+      usage?: { prompt_tokens?: number; completion_tokens?: number };
     };
+    const inputTokens = data.usage?.prompt_tokens ?? 500;
+    const outputTokens = data.usage?.completion_tokens ?? 500;
+    await recordUsageAndDeduct({
+      userId: user.id,
+      operationType: "scene-image",
+      provider: "openrouter",
+      model: modelId || DEFAULT_IMAGE_MODEL,
+      inputTokens,
+      outputTokens,
+      metadata: { fragmentIndex },
+    });
     const firstImage = data.choices?.[0]?.message?.images?.[0];
     const imageUrl = firstImage?.image_url?.url ?? (firstImage as { imageUrl?: { url?: string } })?.imageUrl?.url;
     if (!imageUrl || !imageUrl.startsWith("data:")) {
@@ -123,7 +166,8 @@ export async function POST(req: NextRequest) {
       const thumbnail = await prisma.thumbnail.create({
         data: {
           userId: user.id,
-          projectId,
+          videoId: targetVideoId,
+          projectId: targetVideoId ? null : projectId,
           blobUrl: `${LOCAL_PREFIX}${"scene-" + fragmentIndex}-${Date.now()}`,
           prompt,
           aiProvider: "openrouter",
@@ -153,7 +197,8 @@ export async function POST(req: NextRequest) {
     const thumbnail = await prisma.thumbnail.create({
       data: {
         userId: user.id,
-        projectId,
+        videoId: targetVideoId,
+        projectId: targetVideoId ? null : projectId,
         blobUrl,
         prompt,
         aiProvider: "openrouter",
@@ -167,6 +212,7 @@ export async function POST(req: NextRequest) {
     });
   } catch (e: unknown) {
     console.error(e);
+    const msg = e instanceof Error ? e.message : "Error al generar imagen de escena";
     const isPrismaTableMissing =
       typeof e === "object" && e !== null && (e as { code?: string }).code === "P2021";
     if (isPrismaTableMissing) {
@@ -175,9 +221,9 @@ export async function POST(req: NextRequest) {
         { status: 503 }
       );
     }
-    return NextResponse.json(
-      { error: e instanceof Error ? e.message : "Error al generar imagen de escena" },
-      { status: 500 }
-    );
+    if (msg.includes("Saldo insuficiente")) {
+      return NextResponse.json({ error: msg, code: "INSUFFICIENT_BALANCE" }, { status: 402 });
+    }
+    return NextResponse.json({ error: msg }, { status: 500 });
   }
 }

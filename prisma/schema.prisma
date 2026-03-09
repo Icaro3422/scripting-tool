@@ -16,6 +16,8 @@ model User {
   email         String?
   name          String?
   imageUrl      String?
+  /** Balance en centavos (ej. 1000 = $10.00). Se descuenta por uso de IA. */
+  balanceCents  Int       @default(0)
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
   channels      Channel[]
@@ -23,31 +25,47 @@ model User {
   presets       Preset[]
   scripts       Script[]
   thumbnails    Thumbnail[]
+  usageRecords  UsageRecord[]
+}
+
+model UsageRecord {
+  id             String   @id @default(cuid())
+  userId         String
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /** script | thumbnail | scene-image | channel-analyze */
+  operationType  String
+  provider       String
+  model          String?
+  inputTokens    Int      @default(0)
+  outputTokens   Int      @default(0)
+  /** Coste estimado en centavos */
+  costCents      Int      @default(0)
+  metadata       Json?
+  createdAt      DateTime @default(now())
 }
 
 model Channel {
-  id              String    @id @default(cuid())
-  userId          String
-  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  youtubeChannelId String   @unique  // ID del canal en YouTube
-  url             String?   // URL del canal (ej: youtube.com/channel/UC...)
-  title           String?
-  description     String?   @db.Text
-  customUrl       String?
-  thumbnailUrl    String?
-  bannerUrl       String?
-  subscriberCount Int       @default(0)
-  videoCount      Int       @default(0)
-  viewCount       String?   // puede ser muy grande
-  country         String?
-  publishedAt     DateTime?
-  // Mapeo / análisis (estilo Scripzy)
-  analysis        Json?     // engagement, tono, colores, etc.
-  presetIds       String[]  @default([]) // IDs de presets generados desde este canal
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
-  projects        Project[]
-  presets         Preset[]
+  id               String    @id @default(cuid())
+  userId           String
+  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  youtubeChannelId String    @unique
+  url              String?
+  title            String?
+  description      String?   @db.Text
+  customUrl        String?
+  thumbnailUrl     String?
+  bannerUrl        String?
+  subscriberCount  Int       @default(0)
+  videoCount       Int       @default(0)
+  viewCount        String?
+  country          String?
+  publishedAt      DateTime?
+  analysis         Json?
+  presetIds        String[]  @default([])
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  projects         Project[]
+  presets          Preset[]
 }
 
 model Preset {
@@ -58,22 +76,51 @@ model Preset {
   channel     Channel?  @relation(fields: [channelId], references: [id], onDelete: SetNull)
   name        String
   description String?   @db.Text
-  // Contenido del preset para dar contexto a la IA
-  payload     Json      // tono, colores, formato título, estructura script, etc.
+  payload     Json
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
   scripts     Script[]
 }
 
 model Project {
+  id           String    @id @default(cuid())
+  userId       String
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  channelId    String?
+  channel      Channel?  @relation(fields: [channelId], references: [id], onDelete: SetNull)
+  /** Nombre del canal / área de trabajo */
+  title        String
+  description  String?   @db.Text
+  /** Legacy: estado del proyecto (usado al crear Video en migración) */
+  status       String?   @default("draft")
+  /** stickman | real_people | cartoon | mixed - estilo visual para la IA */
+  contentStyle String?   @default("mixed")
+  /** IDs de presets de referencia (canales del mismo nicho) */
+  presetIds    String[]   @default([])
+  /** Colores de marca (hex o nombres) para la IA */
+  brandColors  String[]   @default([])
+  /** Tipografía de marca (ej: Montserrat Bold) */
+  typography   String?
+  /** URLs de imágenes de referencia para estilo visual */
+  referenceImageUrls String[] @default([])
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  videos       Video[]
+  scripts      Script[]
+  thumbnails   Thumbnail[]
+}
+
+model Video {
   id          String    @id @default(cuid())
-  userId      String
-  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  channelId   String?
-  channel     Channel?  @relation(fields: [channelId], references: [id], onDelete: SetNull)
-  title       String    // título del video / proyecto
+  projectId   String
+  project     Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  /** Título del video */
+  title       String
   description String?   @db.Text
-  status      String    @default("draft") // draft | script_ready | thumbnail_ready | ready
+  /** draft | script_ready | thumbnail_ready | ready | scheduled | published */
+  status      String    @default("draft")
+  /** YouTube video ID si se publicó */
+  youtubeVideoId String?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
   scripts     Script[]
@@ -84,14 +131,16 @@ model Script {
   id          String    @id @default(cuid())
   userId      String
   user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  projectId   String
-  project     Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  videoId     String?
+  video       Video?    @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  projectId   String?
+  project     Project?  @relation(fields: [projectId], references: [id], onDelete: Cascade)
   presetId    String?
   preset      Preset?   @relation(fields: [presetId], references: [id], onDelete: SetNull)
-  title       String    // título del video (generado o editado)
+  title       String
   content     String    @db.Text
-  blobUrl     String?   // opcional: si se guarda en Vercel Blob
-  aiProvider  String?   // openai | anthropic | deepseek | google
+  blobUrl     String?
+  aiProvider  String?
   aiModel     String?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
@@ -101,12 +150,14 @@ model Thumbnail {
   id            String    @id @default(cuid())
   userId        String
   user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  projectId     String
-  project       Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  blobUrl       String    // Vercel Blob o Cloudinary URL
+  videoId       String?
+  video         Video?    @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  projectId     String?
+  project       Project?  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  blobUrl       String
   prompt        String?   @db.Text
   aiProvider    String?
-  fragmentIndex Int?      // Si está definido, es imagen de escena (fragmento del script); si no, es miniatura del proyecto
+  fragmentIndex Int?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 }

@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { prisma } from "@/lib/db";
-import { chatCompletion } from "@/lib/ai/providers";
+import { chatCompletionWithUsage } from "@/lib/ai/providers";
+import { recordUsageAndDeduct } from "@/lib/billing";
 import { AI_MODELS } from "@/types/ai";
 import type { AIProviderId } from "@/types/ai";
 import {
@@ -24,7 +25,8 @@ export async function POST(req: NextRequest) {
 
     const body = await req.json();
     const {
-      projectId,
+      projectId: projectIdParam,
+      videoId,
       presetId,
       topic,
       modelId,
@@ -32,32 +34,50 @@ export async function POST(req: NextRequest) {
       type,
       targetDurationMinutes,
     } = body as {
-      projectId: string;
+      projectId?: string;
+      videoId?: string;
       presetId?: string;
       topic: string;
       modelId: string;
       provider?: string;
       type: "script" | "title" | "description" | "tags";
-      /** Duración objetivo del video en minutos (1–120). Define longitud del guion. */
       targetDurationMinutes?: number;
     };
 
-    if (!projectId || !topic || !modelId || !type) {
+    if ((!projectIdParam && !videoId) || !topic || !modelId || !type) {
       return NextResponse.json(
-        { error: "projectId, topic, modelId y type son requeridos" },
+        { error: "projectId o videoId, topic, modelId y type son requeridos" },
         { status: 400 }
       );
     }
 
-    const project = await prisma.project.findFirst({
-      where: { id: projectId, userId: user.id },
-      include: { scripts: { orderBy: { createdAt: "desc" }, take: 1 } },
-    });
-    if (!project) {
-      return NextResponse.json({ error: "Proyecto no encontrado" }, { status: 404 });
+    let projectId: string;
+    let targetTitle: string;
+    let latestScriptContent = "";
+    let targetVideoId: string | null = null;
+
+    if (videoId) {
+      const v = await prisma.video.findFirst({
+        where: { id: videoId, project: { userId: user.id } },
+        include: { project: true, scripts: { orderBy: { createdAt: "desc" }, take: 1 } },
+      });
+      if (!v) return NextResponse.json({ error: "Video no encontrado" }, { status: 404 });
+      projectId = v.projectId;
+      targetTitle = v.title;
+      targetVideoId = v.id;
+      if (type === "description" || type === "tags") latestScriptContent = v.scripts[0]?.content ?? "";
+    } else {
+      const p = await prisma.project.findFirst({
+        where: { id: projectIdParam!, userId: user.id },
+        include: { scripts: { orderBy: { createdAt: "desc" }, take: 1 } },
+      });
+      if (!p) return NextResponse.json({ error: "Proyecto no encontrado" }, { status: 404 });
+      projectId = p.id;
+      targetTitle = p.title;
+      if (type === "description" || type === "tags") latestScriptContent = p.scripts[0]?.content ?? "";
     }
 
-    const latestScriptContent = type === "description" || type === "tags" ? project.scripts[0]?.content ?? "" : "";
+    const project = await prisma.project.findFirst({ where: { id: projectId } })!;
 
     let provider: string;
     let modelForApi: string;
@@ -83,7 +103,7 @@ export async function POST(req: NextRequest) {
 
     const scriptMinutes = type === "script" ? Math.min(120, Math.max(1, targetDurationMinutes ?? 5)) : undefined;
     const systemPrompt = buildSystemPrompt(type, presetPayload, scriptMinutes);
-    const thumbnailPhrase = (body as { thumbnailPhrase?: string }).thumbnailPhrase ?? project.title;
+    const thumbnailPhrase = (body as { thumbnailPhrase?: string }).thumbnailPhrase ?? targetTitle;
     const userPrompt = buildUserPrompt(type, topic, presetPayload, scriptMinutes, latestScriptContent, thumbnailPhrase);
 
     const completionOptions =
@@ -91,7 +111,7 @@ export async function POST(req: NextRequest) {
         ? { max_tokens: maxTokensForScriptMinutes(scriptMinutes) }
         : undefined;
 
-    const content = await chatCompletion(
+    const { content, usage } = await chatCompletionWithUsage(
       provider as AIProviderId,
       modelForApi,
       [
@@ -101,6 +121,18 @@ export async function POST(req: NextRequest) {
       completionOptions
     );
 
+    const inputTokens = usage?.prompt_tokens ?? Math.ceil((systemPrompt.length + userPrompt.length) / 4);
+    const outputTokens = usage?.completion_tokens ?? Math.ceil(content.length / 4);
+    await recordUsageAndDeduct({
+      userId: user.id,
+      operationType: "script",
+      provider,
+      model: modelForApi,
+      inputTokens,
+      outputTokens,
+      metadata: { type },
+    });
+
     if (type === "script") {
       const trimmed = content.trim();
       const wordCount = countWords(trimmed);
@@ -109,19 +141,27 @@ export async function POST(req: NextRequest) {
       const script = await prisma.script.create({
         data: {
           userId: user.id,
-          projectId,
+          videoId: targetVideoId,
+          projectId: targetVideoId ? null : projectId,
           presetId: presetId ?? null,
-          title: project.title,
+          title: targetTitle,
           content: trimmed,
           aiProvider: provider,
           aiModel: modelForApi,
         },
-        include: { project: true },
+        include: { video: true, project: true },
       });
-      await prisma.project.update({
-        where: { id: projectId },
-        data: { status: "script_ready" },
-      });
+      if (targetVideoId) {
+        await prisma.video.update({
+          where: { id: targetVideoId },
+          data: { status: "script_ready" },
+        });
+      } else {
+        await prisma.project.update({
+          where: { id: projectId },
+          data: { status: "script_ready" },
+        });
+      }
       return NextResponse.json({
         script,
         generated: trimmed,
@@ -133,18 +173,32 @@ export async function POST(req: NextRequest) {
     }
 
     if (type === "title") {
-      await prisma.project.update({
-        where: { id: projectId },
-        data: { title: content.trim() },
-      });
+      if (targetVideoId) {
+        await prisma.video.update({
+          where: { id: targetVideoId },
+          data: { title: content.trim() },
+        });
+      } else {
+        await prisma.project.update({
+          where: { id: projectId },
+          data: { title: content.trim() },
+        });
+      }
       return NextResponse.json({ generated: content.trim() });
     }
 
     if (type === "description") {
-      await prisma.project.update({
-        where: { id: projectId },
-        data: { description: content.trim() },
-      });
+      if (targetVideoId) {
+        await prisma.video.update({
+          where: { id: targetVideoId },
+          data: { description: content.trim() },
+        });
+      } else {
+        await prisma.project.update({
+          where: { id: projectId },
+          data: { description: content.trim() },
+        });
+      }
       return NextResponse.json({ generated: content.trim() });
     }
 
@@ -164,6 +218,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "type no válido" }, { status: 400 });
   } catch (e: unknown) {
     console.error(e);
+    const msg = e instanceof Error ? e.message : "Error al generar";
     const isPrismaTableMissing =
       typeof e === "object" && e !== null && (e as { code?: string }).code === "P2021";
     if (isPrismaTableMissing) {
@@ -176,10 +231,10 @@ export async function POST(req: NextRequest) {
         { status: 503 }
       );
     }
-    return NextResponse.json(
-      { error: e instanceof Error ? e.message : "Error al generar" },
-      { status: 500 }
-    );
+    if (msg.includes("Saldo insuficiente")) {
+      return NextResponse.json({ error: msg, code: "INSUFFICIENT_BALANCE" }, { status: 402 });
+    }
+    return NextResponse.json({ error: msg }, { status: 500 });
   }
 }
 
