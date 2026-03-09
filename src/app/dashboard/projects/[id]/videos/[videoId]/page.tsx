@@ -17,6 +17,7 @@ import { cn } from "@/lib/utils";
 import { AI_MODELS, SCRIPT_RECOMMENDED_IDS, THUMBNAIL_IMAGE_MODELS } from "@/types/ai";
 import { DURATION_PRESETS, countWords, estimatedMinutes } from "@/lib/scriptUtils";
 import { ScriptFragmentsTable } from "@/components/ScriptFragmentsTable";
+import { ScriptTimeline } from "@/components/ScriptTimeline";
 import {
   getStorageMode,
   setLocalThumbPath,
@@ -716,6 +717,22 @@ export default function VideoEditorPage() {
                       {sceneImageError}
                     </p>
                   )}
+                  <div className="mb-6">
+                    <h3 className="text-sm font-medium text-[rgb(var(--text-primary))] mb-2">
+                      Timeline del script
+                    </h3>
+                    <ScriptTimeline
+                      scriptContent={scriptContentForFragments}
+                      sceneImageModelId={sceneImageModelId}
+                      onSceneImageModelChange={setSceneImageModelId}
+                      onGenerateScene={handleGenerateScene}
+                      sceneImages={sceneImages}
+                      sceneLoadingIndex={sceneImageLoading}
+                    />
+                  </div>
+                  <h3 className="text-sm font-medium text-[rgb(var(--text-primary))] mb-2">
+                    Tabla de fragmentos (copiar bloques)
+                  </h3>
                   <div className="overflow-x-auto max-h-[520px] overflow-y-auto">
                     <ScriptFragmentsTable
                       scriptContent={scriptContentForFragments}
