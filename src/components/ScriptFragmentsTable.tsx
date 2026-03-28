@@ -2,6 +2,16 @@
 
 import { useState } from "react";
 import { fragmentarEstricto } from "@/lib/scriptUtils";
+import { splitScriptIntelligently, strictSplit } from "@/lib/text-processing";
+
+type SplitMethod = "strict" | "count";
+
+interface SplitConfigState {
+  method: SplitMethod;
+  targetChunks: number;
+  strictMinWords: number;
+  strictMaxWords: number;
+}
 import { ImageIcon, Copy, Check, Loader2 } from "lucide-react";
 import { LocalThumbnailImage } from "@/components/LocalThumbnailImage";
 import { LOCAL_URL_PREFIX } from "@/lib/client-storage";
@@ -30,6 +40,9 @@ interface ScriptFragmentsTableProps {
   sceneImages?: Record<number, { id: string; blobUrl: string }>;
   /** Índice del fragmento para el que se está generando imagen (muestra loading) */
   sceneLoadingIndex?: number | null;
+  // Nuevas props para método de división dinámica
+  splitMethod?: SplitMethod;
+  splitConfig?: SplitConfigState;
 }
 
 export function ScriptFragmentsTable({
@@ -39,10 +52,26 @@ export function ScriptFragmentsTable({
   onGenerateScene,
   sceneImages = {},
   sceneLoadingIndex = null,
+  splitMethod = "strict",
+  splitConfig,
 }: ScriptFragmentsTableProps) {
   const [copiedBlock, setCopiedBlock] = useState<number | null>(null);
   const [previewSceneIndex, setPreviewSceneIndex] = useState<number | null>(null);
-  const fragmentos = fragmentarEstricto(scriptContent, 15, 21);
+
+  // Determinar método de división
+  const fragmentos = (() => {
+    if (splitMethod && splitConfig) {
+      if (splitMethod === "strict") {
+        return strictSplit(scriptContent, {
+          minWords: splitConfig.strictMinWords,
+          maxWords: splitConfig.strictMaxWords,
+        }).map(f => f.text);
+      } else {
+        return splitScriptIntelligently(scriptContent, splitConfig.targetChunks).map(f => f.text);
+      }
+    }
+    return fragmentarEstricto(scriptContent, 15, 21);
+  })();
 
   function handleCopyBlock(from: number, to: number) {
     const lines = fragmentos.slice(from - 1, to).map((t, i) => `${from + i}. ${t}`);

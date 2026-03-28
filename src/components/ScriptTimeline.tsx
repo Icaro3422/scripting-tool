@@ -24,6 +24,17 @@ const SCENE_IMAGE_MODELS: SceneImageModel[] = [
   { id: "x-ai/grok-2-vision-1212", name: "Grok 2 Vision (imagen)" },
 ];
 
+import { splitScriptIntelligently, strictSplit } from "@/lib/text-processing";
+
+type SplitMethod = "strict" | "count";
+
+interface SplitConfigState {
+  method: SplitMethod;
+  targetChunks: number;
+  strictMinWords: number;
+  strictMaxWords: number;
+}
+
 interface ScriptTimelineProps {
   scriptContent: string;
   sceneImageModelId: string;
@@ -35,6 +46,9 @@ interface ScriptTimelineProps {
   sceneLoadingAll?: boolean;
   referenceImagePreview?: string | null;
   onReferenceImageChange?: (base64: string | null) => void;
+  // Nuevas props para método de división dinámica
+  splitMethod?: SplitMethod;
+  splitConfig?: SplitConfigState;
 }
 
 export function ScriptTimeline({
@@ -48,10 +62,28 @@ export function ScriptTimeline({
   sceneLoadingAll = false,
   referenceImagePreview = null,
   onReferenceImageChange,
+  splitMethod = "strict",
+  splitConfig,
 }: ScriptTimelineProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [selectedSceneIndex, setSelectedSceneIndex] = useState<number | null>(null);
-  const fragmentos = fragmentarEstricto(scriptContent, 15, 21);
+
+  // Determinar método de división
+  const fragmentos = (() => {
+    // Si se proporciona splitMethod + splitConfig, usarlos
+    if (splitMethod && splitConfig) {
+      if (splitMethod === "strict") {
+        return strictSplit(scriptContent, {
+          minWords: splitConfig.strictMinWords,
+          maxWords: splitConfig.strictMaxWords,
+        }).map(f => f.text);
+      } else {
+        return splitScriptIntelligently(scriptContent, splitConfig.targetChunks).map(f => f.text);
+      }
+    }
+    // Default: usar fragmentarEstricto original
+    return fragmentarEstricto(scriptContent, 15, 21);
+  })();
 
   if (fragmentos.length === 0) return null;
 
