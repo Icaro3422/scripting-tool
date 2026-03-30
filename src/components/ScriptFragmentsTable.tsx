@@ -60,17 +60,17 @@ export function ScriptFragmentsTable({
 
   // Determinar método de división
   const fragmentos = (() => {
-    if (splitMethod && splitConfig) {
-      if (splitMethod === "strict") {
-        return strictSplit(scriptContent, {
-          minWords: splitConfig.strictMinWords,
-          maxWords: splitConfig.strictMaxWords,
-        }).map(f => f.text);
-      } else {
-        return splitScriptIntelligently(scriptContent, splitConfig.targetChunks).map(f => f.text);
-      }
+    // Usar splitConfig como fuente de verdad cuando exista, sino usar splitMethod
+    const method = splitConfig?.method ?? splitMethod;
+    
+    if (method === "strict") {
+      return strictSplit(scriptContent, {
+        minWords: splitConfig?.strictMinWords,
+        maxWords: splitConfig?.strictMaxWords,
+      }).map(f => f.text);
+    } else {
+      return splitScriptIntelligently(scriptContent, splitConfig?.targetChunks ?? 10).map(f => f.text);
     }
-    return fragmentarEstricto(scriptContent, 15, 21);
   })();
 
   function handleCopyBlock(from: number, to: number) {
