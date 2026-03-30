@@ -35,7 +35,7 @@ interface ScriptTimelineProps {
   sceneLoadingAll?: boolean;
   referenceImagePreview?: string | null;
   onReferenceImageChange?: (base64: string | null) => void;
-  // Nuevas props para método de división dinámica
+  // Dynamic split method props
   splitMethod?: SplitMethod;
   splitConfig?: SplitConfigState;
 }
@@ -57,7 +57,7 @@ export function ScriptTimeline({
   const scrollRef = useRef<HTMLDivElement>(null);
   const [selectedSceneIndex, setSelectedSceneIndex] = useState<number | null>(null);
 
-  // Determinar método de división
+  // Determine split method
   const fragmentos = useMemo(() => {
     const method = splitConfig?.method ?? splitMethod;
     const fragments = splitByMethod(scriptContent, method, {

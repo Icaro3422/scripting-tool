@@ -78,14 +78,14 @@ function findBestSplitIndex(text: string, idealIndex: number): number {
 // ============================================================================
 
 /**
- * Divide el guion en fragmentos de tamaño aproximadamente igual.
+ * Splits the script into approximately equal-sized fragments.
  *
- * Busca puntos naturales de corte (. o \n) dentro de una ventana alrededor
- * del tamaño ideal de cada chunk.
+ * Finds natural cut points (. or \n) within a window around
+ * the ideal chunk size.
  *
- * @param rawText - El texto del guion a dividir
- * @param chunkCount - Número aproximado de fragmentos deseados
- * @returns Array de ScriptFragment con id secuencial y texto
+ * @param rawText - The script text to split
+ * @param chunkCount - Approximate number of desired fragments
+ * @returns Array of ScriptFragment with sequential id and text
  */
 export function splitScriptIntelligently(
   rawText: string,
@@ -155,8 +155,8 @@ export function splitScriptIntelligently(
 }
 
 /**
- * Retorna la cantidad estimada de fragmentos que resultarían
- * de dividir el texto (para preview sin renderizado visual)
+ * Returns the estimated number of fragments that would result
+ * from splitting the text. Uses full splitting algorithm.
  */
 export function previewFragmentCount(
   rawText: string,

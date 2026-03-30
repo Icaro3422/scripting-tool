@@ -1,8 +1,8 @@
 /**
- * Wrapper para el algoritmo de fragmentación estricta (15-21 palabras)
+ * Wrapper for strict fragmentation algorithm (15-21 words)
  *
- * Este módulo envuelve la función fragmentarEstricto existente en scriptUtils
- * para mantener compatibilidad con la API del módulo text-processing.
+ * This module wraps the fragmentarEstricto function from scriptUtils
+ * to maintain compatibility with the text-processing module API.
  */
 
 import { fragmentarEstricto } from "@/lib/scriptUtils";
@@ -10,12 +10,12 @@ import type { ScriptFragment, StrictSplitOptions } from "./types";
 import { DEFAULT_MIN_WORDS, DEFAULT_MAX_WORDS } from "./constants";
 
 /**
- * Fragmenta el guion en escenas de entre minP y maxP palabras,
- * cortando en signos de puntuación [.,;:] cuando sea posible.
+ * Splits the script into scenes with between minP and maxP words,
+ * cutting on punctuation marks [.,;:] when possible.
  *
- * @param text - El texto del guion a dividir
- * @param options - Opciones de fragmentación (minWords, maxWords)
- * @returns Array de ScriptFragment con id secuencial y texto
+ * @param text - The script text to split
+ * @param options - Fragmentation options (minWords, maxWords)
+ * @returns Array of ScriptFragment with sequential id and text
  */
 export function strictSplit(
   text: string,
@@ -57,8 +57,8 @@ export function createStrictSplitter(defaultOptions?: StrictSplitOptions) {
 }
 
 /**
- * Retorna la cantidad estimada de fragmentos que resultarían
- * de dividir el texto (para preview sin renderizado visual)
+ * Returns the estimated number of fragments that would result
+ * from splitting the text. Uses full splitting algorithm.
  */
 export function previewStrictFragmentCount(
   text: string,

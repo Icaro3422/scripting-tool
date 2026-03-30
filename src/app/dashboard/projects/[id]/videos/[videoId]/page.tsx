@@ -107,7 +107,7 @@ export default function VideoEditorPage() {
   const [storageMode, setStorageModeState] = useState<"cloud" | "local">("cloud");
   const [localFolderName, setLocalFolderNameState] = useState<string | null>(null);
   
-  // Estado para método de división dinámica (Iteración 1)
+  // Dynamic split method state (Iteration 1)
   const [splitConfig, setSplitConfig] = useState({
     method: "strict" as "strict" | "count",
     targetChunks: 10,
