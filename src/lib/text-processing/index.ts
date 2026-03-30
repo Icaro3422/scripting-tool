@@ -78,7 +78,7 @@ export {
  */
 export function splitByMethod(
   text: string,
-  method: "strict" | "count",
+  method: SplitMethod,
   options?: {
     minWords?: number;
     maxWords?: number;
