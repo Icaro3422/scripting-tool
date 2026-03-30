@@ -30,7 +30,7 @@ export function ScriptSplitConfig({
   const [config, setConfig] = useState<SplitConfigState>({
     ...DEFAULT_CONFIG,
     ...initialConfig,
-    method: initialMethod ?? DEFAULT_CONFIG.method,
+    method: initialMethod ?? initialConfig?.method ?? DEFAULT_CONFIG.method,
   });
 
   const { fragments, wordCount } = useMemo(() => {
@@ -57,8 +57,10 @@ export function ScriptSplitConfig({
     onMethodChange?.(newMethod, newConfig);
   }
 
-  function handleConfigChange(key: keyof SplitConfigState, value: number) {
-    let newConfig: SplitConfigState = { ...config, [key]: value } as SplitConfigState;
+  type NumericConfigKey = "targetChunks" | "strictMinWords" | "strictMaxWords";
+
+  function handleConfigChange(key: NumericConfigKey, value: number) {
+    const newConfig: SplitConfigState = { ...config, [key]: value };
 
     // Ensure min <= max when updating either field
     if (key === "strictMinWords" && value > newConfig.strictMaxWords) {
