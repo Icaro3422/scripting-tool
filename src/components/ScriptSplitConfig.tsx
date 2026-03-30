@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useMemo } from "react";
-import { splitScriptIntelligently, strictSplit, countWords, type SplitMethod, type SplitConfigState } from "@/lib/text-processing";
+import { countWords, previewStrictFragmentCount, previewFragmentCount, type SplitMethod, type SplitConfigState } from "@/lib/text-processing";
 import { Settings2, Hash, List } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -33,22 +33,19 @@ export function ScriptSplitConfig({
     method: initialMethod ?? initialConfig?.method ?? DEFAULT_CONFIG.method,
   });
 
-  const { fragments, wordCount } = useMemo(() => {
+  const { fragmentCount, wordCount } = useMemo(() => {
     if (!scriptContent.trim()) {
-      return { fragments: [] as { id: number; text: string }[], wordCount: 0 };
+      return { fragmentCount: 0, wordCount: 0 };
     }
-
-    const minWords = config.strictMinWords;
-    const maxWords = config.strictMaxWords;
-
-    const frags =
-      config.method === "strict"
-        ? strictSplit(scriptContent, { minWords, maxWords })
-        : splitScriptIntelligently(scriptContent, config.targetChunks);
 
     const wc = countWords(scriptContent);
 
-    return { fragments: frags, wordCount: wc };
+    // Use count-only functions for preview (more efficient)
+    const fc = config.method === "strict"
+      ? previewStrictFragmentCount(scriptContent, { minWords: config.strictMinWords, maxWords: config.strictMaxWords })
+      : previewFragmentCount(scriptContent, config.targetChunks);
+
+    return { fragmentCount: fc, wordCount: wc };
   }, [scriptContent, config]);
 
   function handleMethodChange(newMethod: SplitMethod) {

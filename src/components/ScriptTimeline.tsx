@@ -2,7 +2,7 @@
 
 import { useRef, useState, useMemo } from "react";
 import { WORDS_PER_MINUTE } from "@/lib/scriptUtils";
-import { splitByMethod } from "@/lib/text-processing";
+import { splitByMethod, type SplitMethod, type SplitConfigState } from "@/lib/text-processing";
 import { ImageIcon, Loader2, Mic, GripVertical } from "lucide-react";
 import { LocalThumbnailImage } from "@/components/LocalThumbnailImage";
 import { LOCAL_URL_PREFIX } from "@/lib/client-storage";

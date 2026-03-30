@@ -155,8 +155,8 @@ export function splitScriptIntelligently(
 }
 
 /**
- * Retorna el número de fragmentos que resultarían de dividir el texto
- * (sin crear los fragmentos reales, para preview)
+ * Retorna la cantidad estimada de fragmentos que resultarían
+ * de dividir el texto (para preview sin renderizado visual)
  */
 export function previewFragmentCount(
   rawText: string,
