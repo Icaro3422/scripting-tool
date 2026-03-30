@@ -56,3 +56,10 @@ export interface StrictSplitOptions {
 }
 
 export type SplitMethod = "strict" | "count";
+
+export interface SplitConfigState {
+  method: SplitMethod;
+  targetChunks: number;
+  strictMinWords: number;
+  strictMaxWords: number;
+}

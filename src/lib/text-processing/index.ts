@@ -30,6 +30,7 @@ export type {
   GenerateResponseBody,
   StrictSplitOptions,
   SplitMethod,
+  SplitConfigState,
 } from "./types";
 
 // ============================================================================

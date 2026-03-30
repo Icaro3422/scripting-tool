@@ -1,20 +1,10 @@
 "use client";
 
-import { useState } from "react";
-import { fragmentarEstricto } from "@/lib/scriptUtils";
-import { splitScriptIntelligently, strictSplit } from "@/lib/text-processing";
+import { useState, useMemo } from "react";
+import { splitScriptIntelligently, strictSplit, type SplitMethod, type SplitConfigState } from "@/lib/text-processing";
 import { ImageIcon, Copy, Check, Loader2 } from "lucide-react";
 import { LocalThumbnailImage } from "@/components/LocalThumbnailImage";
 import { LOCAL_URL_PREFIX } from "@/lib/client-storage";
-
-type SplitMethod = "strict" | "count";
-
-interface SplitConfigState {
-  method: SplitMethod;
-  targetChunks: number;
-  strictMinWords: number;
-  strictMaxWords: number;
-}
 
 const BLOCK_SIZE = 5;
 
@@ -59,8 +49,7 @@ export function ScriptFragmentsTable({
   const [previewSceneIndex, setPreviewSceneIndex] = useState<number | null>(null);
 
   // Determinar método de división
-  const fragmentos = (() => {
-    // Usar splitConfig como fuente de verdad cuando exista, sino usar splitMethod
+  const fragmentos = useMemo(() => {
     const method = splitConfig?.method ?? splitMethod;
     
     if (method === "strict") {
@@ -71,7 +60,7 @@ export function ScriptFragmentsTable({
     } else {
       return splitScriptIntelligently(scriptContent, splitConfig?.targetChunks ?? 10).map(f => f.text);
     }
-  })();
+  }, [scriptContent, splitMethod, splitConfig]);
 
   function handleCopyBlock(from: number, to: number) {
     const lines = fragmentos.slice(from - 1, to).map((t, i) => `${from + i}. ${t}`);

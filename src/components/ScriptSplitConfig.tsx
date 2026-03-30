@@ -1,18 +1,11 @@
 "use client";
 
 import { useState, useMemo } from "react";
-import { splitScriptIntelligently, strictSplit, countWords } from "@/lib/text-processing";
+import { splitScriptIntelligently, strictSplit, countWords, type SplitMethod, type SplitConfigState } from "@/lib/text-processing";
 import { Settings2, Hash, List } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-export type SplitMethod = "strict" | "count";
-
-interface SplitConfigState {
-  method: SplitMethod;
-  targetChunks: number;
-  strictMinWords: number;
-  strictMaxWords: number;
-}
+export type { SplitMethod, SplitConfigState };
 
 interface ScriptSplitConfigProps {
   scriptContent: string;

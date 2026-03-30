@@ -1,9 +1,9 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useRef, useState, useMemo } from "react";
 import { fragmentarEstricto } from "@/lib/scriptUtils";
 import { WORDS_PER_MINUTE } from "@/lib/scriptUtils";
-import { splitScriptIntelligently, strictSplit } from "@/lib/text-processing";
+import { splitScriptIntelligently, strictSplit, type SplitMethod, type SplitConfigState } from "@/lib/text-processing";
 import { ImageIcon, Loader2, Mic, GripVertical } from "lucide-react";
 import { LocalThumbnailImage } from "@/components/LocalThumbnailImage";
 import { LOCAL_URL_PREFIX } from "@/lib/client-storage";
@@ -24,15 +24,6 @@ const SCENE_IMAGE_MODELS: SceneImageModel[] = [
   { id: "google/gemini-2.5-flash-image-preview:free", name: "Nano Banana (gratis)" },
   { id: "x-ai/grok-2-vision-1212", name: "Grok 2 Vision (imagen)" },
 ];
-
-type SplitMethod = "strict" | "count";
-
-interface SplitConfigState {
-  method: SplitMethod;
-  targetChunks: number;
-  strictMinWords: number;
-  strictMaxWords: number;
-}
 
 interface ScriptTimelineProps {
   scriptContent: string;
@@ -68,8 +59,7 @@ export function ScriptTimeline({
   const [selectedSceneIndex, setSelectedSceneIndex] = useState<number | null>(null);
 
   // Determinar método de división
-  const fragmentos = (() => {
-    // Usar splitConfig como fuente de verdad cuando exista, sino usar splitMethod
+  const fragmentos = useMemo(() => {
     const method = splitConfig?.method ?? splitMethod;
     
     if (method === "strict") {
@@ -80,9 +70,7 @@ export function ScriptTimeline({
     } else {
       return splitScriptIntelligently(scriptContent, splitConfig?.targetChunks ?? 10).map(f => f.text);
     }
-    // Default: usar fragmentarEstricto original
-    return fragmentarEstricto(scriptContent, 15, 21);
-  })();
+  }, [scriptContent, splitMethod, splitConfig]);
 
   if (fragmentos.length === 0) return null;
 
