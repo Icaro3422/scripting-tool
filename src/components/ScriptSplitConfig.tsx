@@ -10,7 +10,15 @@ export type { SplitMethod, SplitConfigState };
 interface ScriptSplitConfigProps {
   scriptContent: string;
   onMethodChange?: (method: SplitMethod, config: SplitConfigState) => void;
+  /**
+   * Initial method - only applied on mount.
+   * For controlled component, manage state in parent and pass via initialConfig.
+   */
   initialMethod?: SplitMethod;
+  /**
+   * Initial config - only applied on mount.
+   * For controlled component, manage state in parent and update via onMethodChange.
+   */
   initialConfig?: Partial<SplitConfigState>;
 }
 
@@ -96,7 +104,7 @@ export function ScriptSplitConfig({
           )}
         >
           <Hash className="h-4 w-4" />
-          Por palabras (15-21)
+          Por palabras ({config.strictMinWords}-{config.strictMaxWords})
         </button>
         <button
           type="button"

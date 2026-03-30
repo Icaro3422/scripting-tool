@@ -69,3 +69,6 @@ export function getStrictWordRange(options?: {
 
 // Re-export de constantes útiles
 export { WORDS_PER_MINUTE, DEFAULT_MIN_WORDS, DEFAULT_MAX_WORDS } from "./constants";
+
+// Compatibility alias for existing API
+export const estimatedMinutes = estimateMinutes;
