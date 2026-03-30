@@ -3,6 +3,9 @@
 import { useState } from "react";
 import { fragmentarEstricto } from "@/lib/scriptUtils";
 import { splitScriptIntelligently, strictSplit } from "@/lib/text-processing";
+import { ImageIcon, Copy, Check, Loader2 } from "lucide-react";
+import { LocalThumbnailImage } from "@/components/LocalThumbnailImage";
+import { LOCAL_URL_PREFIX } from "@/lib/client-storage";
 
 type SplitMethod = "strict" | "count";
 
@@ -12,9 +15,6 @@ interface SplitConfigState {
   strictMinWords: number;
   strictMaxWords: number;
 }
-import { ImageIcon, Copy, Check, Loader2 } from "lucide-react";
-import { LocalThumbnailImage } from "@/components/LocalThumbnailImage";
-import { LOCAL_URL_PREFIX } from "@/lib/client-storage";
 
 const BLOCK_SIZE = 5;
 

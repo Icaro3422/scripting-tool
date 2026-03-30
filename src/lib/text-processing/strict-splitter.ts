@@ -21,8 +21,19 @@ export function strictSplit(
   text: string,
   options?: StrictSplitOptions
 ): ScriptFragment[] {
-  const minP = options?.minWords ?? DEFAULT_MIN_WORDS;
-  const maxP = options?.maxWords ?? DEFAULT_MAX_WORDS;
+  // Normalize range: ensure min <= max and valid values
+  let minP = options?.minWords ?? DEFAULT_MIN_WORDS;
+  let maxP = options?.maxWords ?? DEFAULT_MAX_WORDS;
+
+  // Ensure positive values
+  if (minP < 1) minP = 1;
+  if (maxP < 1) maxP = 1;
+  // Swap if min > max
+  if (minP > maxP) {
+    const tmp = minP;
+    minP = maxP;
+    maxP = tmp;
+  }
 
   const fragments = fragmentarEstricto(text, minP, maxP);
 

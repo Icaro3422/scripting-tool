@@ -16,6 +16,11 @@
 // Tipos
 // ============================================================================
 
+// Real imports for internal usage
+import type { ScriptFragment, SplitMethod } from "./types";
+import { strictSplit } from "./strict-splitter";
+import { splitScriptIntelligently } from "./splitter";
+
 export type {
   ScriptFragment,
   TextStats,
@@ -65,7 +70,7 @@ export {
 } from "./strict-splitter";
 
 // ============================================================================
-// Utilitários de Utilidad
+// Utility Functions
 // ============================================================================
 
 /**

@@ -3,6 +3,7 @@
 import { useRef, useState } from "react";
 import { fragmentarEstricto } from "@/lib/scriptUtils";
 import { WORDS_PER_MINUTE } from "@/lib/scriptUtils";
+import { splitScriptIntelligently, strictSplit } from "@/lib/text-processing";
 import { ImageIcon, Loader2, Mic, GripVertical } from "lucide-react";
 import { LocalThumbnailImage } from "@/components/LocalThumbnailImage";
 import { LOCAL_URL_PREFIX } from "@/lib/client-storage";
@@ -23,8 +24,6 @@ const SCENE_IMAGE_MODELS: SceneImageModel[] = [
   { id: "google/gemini-2.5-flash-image-preview:free", name: "Nano Banana (gratis)" },
   { id: "x-ai/grok-2-vision-1212", name: "Grok 2 Vision (imagen)" },
 ];
-
-import { splitScriptIntelligently, strictSplit } from "@/lib/text-processing";
 
 type SplitMethod = "strict" | "count";
 

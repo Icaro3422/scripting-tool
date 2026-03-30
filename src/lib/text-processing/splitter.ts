@@ -74,7 +74,7 @@ function findBestSplitIndex(text: string, idealIndex: number): number {
 }
 
 // ============================================================================
-// Funkcje Öffentliche
+// Public Functions
 // ============================================================================
 
 /**

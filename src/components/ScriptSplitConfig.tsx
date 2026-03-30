@@ -65,7 +65,15 @@ export function ScriptSplitConfig({
   }
 
   function handleConfigChange(key: keyof SplitConfigState, value: number) {
-    const newConfig = { ...config, [key]: value };
+    let newConfig: SplitConfigState = { ...config, [key]: value } as SplitConfigState;
+
+    // Ensure min <= max when updating either field
+    if (key === "strictMinWords" && value > newConfig.strictMaxWords) {
+      newConfig.strictMaxWords = value;
+    } else if (key === "strictMaxWords" && value < newConfig.strictMinWords) {
+      newConfig.strictMinWords = value;
+    }
+
     setConfig(newConfig);
     onMethodChange?.(newConfig.method, newConfig);
   }
