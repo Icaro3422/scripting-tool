@@ -57,8 +57,8 @@ export function createStrictSplitter(defaultOptions?: StrictSplitOptions) {
 }
 
 /**
- * Retorna el número de fragmentos que resultarían de dividir el texto
- * (para preview sin crear los fragmentos reales)
+ * Retorna la cantidad estimada de fragmentos que resultarían
+ * de dividir el texto (para preview sin renderizado visual)
  */
 export function previewStrictFragmentCount(
   text: string,
