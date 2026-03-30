@@ -38,8 +38,9 @@ export const SEARCH_WINDOW = 160;
 
 /**
  * Palabras por minuto al narrar (referencia para español)
+ * Re-exported from scriptUtils to centralize the constant
  */
-export const WORDS_PER_MINUTE = 150;
+export { WORDS_PER_MINUTE } from "@/lib/scriptUtils";
 
 /**
  * Rango de palabras por escena (para método strict)

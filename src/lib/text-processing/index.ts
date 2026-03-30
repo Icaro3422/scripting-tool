@@ -97,9 +97,11 @@ export function splitByMethod(
 }
 
 // ============================================================================
-// Re-export.helpers existentes (para compatibilidad)
+// Re-export helpers existentes (para compatibilidad)
 // ============================================================================
 
-// Re-export de fragmentarEstricto para casos de uso directo
-// Nota: Se puede importar directamente desde @/lib/scriptUtils
-// export { fragmentarEstricto } from "@/lib/scriptUtils";
+// Compatibility alias for existing API (estimatedMinutes)
+export { estimatedMinutes } from "./stats";
+
+// Re-export constant from scriptUtils to avoid duplication
+export { WORDS_PER_MINUTE } from "@/lib/scriptUtils";
