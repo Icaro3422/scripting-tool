@@ -174,7 +174,7 @@ export function ScriptSplitConfig({
       <div className="rounded-lg bg-[rgb(var(--bg-muted))] p-3 text-sm flex flex-wrap gap-x-4 gap-y-1">
         <span className="text-[rgb(var(--text-muted))]">
           <strong className="text-[rgb(var(--text-primary))]">
-            {fragments.length}
+            {fragmentCount}
           </strong>{" "}
           fragmentos
         </span>
@@ -187,8 +187,8 @@ export function ScriptSplitConfig({
         <span className="text-[rgb(var(--text-muted))]">
           Promedio:{" "}
           <strong className="text-[rgb(var(--text-primary))]">
-            {wordCount > 0 && fragments.length > 0
-              ? Math.round(wordCount / fragments.length)
+            {wordCount > 0 && fragmentCount > 0
+              ? Math.round(wordCount / fragmentCount)
               : 0}
           </strong>{" "}
           palabras/escena
