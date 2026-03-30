@@ -748,8 +748,7 @@ export default function VideoEditorPage() {
                     scriptContent={scriptContentForFragments}
                     initialMethod={splitMethod}
                     initialConfig={splitConfig}
-                    onMethodChange={(method, config) => {
-                      setSplitMethod(method);
+                    onMethodChange={(_method, config) => {
                       setSplitConfig(config);
                     }}
                   />

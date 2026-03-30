@@ -40,7 +40,7 @@ export function ScriptSplitConfig({
 
     const wc = countWords(scriptContent);
 
-    // Use count-only functions for preview (more efficient)
+    // Use preview helpers to estimate fragment count for UI
     const fc = config.method === "strict"
       ? previewStrictFragmentCount(scriptContent, { minWords: config.strictMinWords, maxWords: config.strictMaxWords })
       : previewFragmentCount(scriptContent, config.targetChunks);
