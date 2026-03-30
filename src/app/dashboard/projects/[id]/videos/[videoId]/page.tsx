@@ -108,13 +108,15 @@ export default function VideoEditorPage() {
   const [localFolderName, setLocalFolderNameState] = useState<string | null>(null);
   
   // Estado para método de división dinámica (Iteración 1)
-  const [splitMethod, setSplitMethod] = useState<"strict" | "count">("strict");
   const [splitConfig, setSplitConfig] = useState({
     method: "strict" as "strict" | "count",
     targetChunks: 10,
     strictMinWords: 15,
     strictMaxWords: 21,
   });
+
+  // Derived value for components that need just the method
+  const splitMethod = splitConfig.method;
 
   useEffect(() => {
     setStorageModeState(getStorageMode());
