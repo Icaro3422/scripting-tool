@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { auth } from "@clerk/nextjs/server";
 import { getVoiceFilters, filterVoices, type VoiceGender } from "@/lib/voices/voiceCatalog";
 
 /**
@@ -9,6 +10,9 @@ import { getVoiceFilters, filterVoices, type VoiceGender } from "@/lib/voices/vo
  */
 export async function GET(req: NextRequest) {
   try {
+    const { userId } = await auth();
+    if (!userId) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
+
     const { searchParams } = new URL(req.url);
     const lang = searchParams.get("lang") ?? undefined;
     const region = searchParams.get("region") ?? undefined;

@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { fragmentarEstricto } from "@/lib/scriptUtils";
+import { fragmentarScript, type FragmentSplitMode } from "@/lib/scriptUtils";
 import { WORDS_PER_MINUTE } from "@/lib/scriptUtils";
 import { ImageIcon, Loader2, Mic, GripVertical } from "lucide-react";
 import { LocalThumbnailImage } from "@/components/LocalThumbnailImage";
@@ -26,6 +26,7 @@ const SCENE_IMAGE_MODELS: SceneImageModel[] = [
 
 interface ScriptTimelineProps {
   scriptContent: string;
+  fragmentSplitMode: FragmentSplitMode;
   sceneImageModelId: string;
   onSceneImageModelChange: (id: string) => void;
   onGenerateScene?: (fragmentIndex: number, text: string) => void;
@@ -39,6 +40,7 @@ interface ScriptTimelineProps {
 
 export function ScriptTimeline({
   scriptContent,
+  fragmentSplitMode,
   sceneImageModelId,
   onSceneImageModelChange,
   onGenerateScene,
@@ -51,7 +53,7 @@ export function ScriptTimeline({
 }: ScriptTimelineProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [selectedSceneIndex, setSelectedSceneIndex] = useState<number | null>(null);
-  const fragmentos = fragmentarEstricto(scriptContent, 15, 21);
+  const fragmentos = fragmentarScript(scriptContent, fragmentSplitMode);
 
   if (fragmentos.length === 0) return null;
 

@@ -166,10 +166,11 @@ export async function POST(req: NextRequest) {
           images?: Array<{ image_url?: { url?: string }; imageUrl?: { url?: string } }>;
         };
       }[];
-      usage?: { prompt_tokens?: number; completion_tokens?: number };
+      usage?: { prompt_tokens?: number; completion_tokens?: number; cost?: number };
     };
     const inputTokens = data.usage?.prompt_tokens ?? 500;
     const outputTokens = data.usage?.completion_tokens ?? 500;
+    const actualCostUsd = typeof data.usage?.cost === "number" ? data.usage.cost : undefined;
     await recordUsageAndDeduct({
       userId: user.id,
       operationType: "thumbnail",
@@ -177,6 +178,7 @@ export async function POST(req: NextRequest) {
       model: modelId || DEFAULT_IMAGE_MODEL,
       inputTokens,
       outputTokens,
+      actualCostUsd,
     });
     const firstImage = data.choices?.[0]?.message?.images?.[0];
     const imageUrl = firstImage?.image_url?.url ?? (firstImage as { imageUrl?: { url?: string } })?.imageUrl?.url;

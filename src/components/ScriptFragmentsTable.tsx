@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { fragmentarEstricto } from "@/lib/scriptUtils";
+import { fragmentarScript, type FragmentSplitMode } from "@/lib/scriptUtils";
 import { ImageIcon, Copy, Check, Loader2 } from "lucide-react";
 import { LocalThumbnailImage } from "@/components/LocalThumbnailImage";
 import { LOCAL_URL_PREFIX } from "@/lib/client-storage";
@@ -23,6 +23,7 @@ const SCENE_IMAGE_MODELS: SceneImageModel[] = [
 
 interface ScriptFragmentsTableProps {
   scriptContent: string;
+  fragmentSplitMode: FragmentSplitMode;
   sceneImageModelId: string;
   onSceneImageModelChange: (id: string) => void;
   onGenerateScene?: (fragmentIndex: number, text: string) => void;
@@ -34,6 +35,7 @@ interface ScriptFragmentsTableProps {
 
 export function ScriptFragmentsTable({
   scriptContent,
+  fragmentSplitMode,
   sceneImageModelId,
   onSceneImageModelChange,
   onGenerateScene,
@@ -42,7 +44,7 @@ export function ScriptFragmentsTable({
 }: ScriptFragmentsTableProps) {
   const [copiedBlock, setCopiedBlock] = useState<number | null>(null);
   const [previewSceneIndex, setPreviewSceneIndex] = useState<number | null>(null);
-  const fragmentos = fragmentarEstricto(scriptContent, 15, 21);
+  const fragmentos = fragmentarScript(scriptContent, fragmentSplitMode);
 
   function handleCopyBlock(from: number, to: number) {
     const lines = fragmentos.slice(from - 1, to).map((t, i) => `${from + i}. ${t}`);

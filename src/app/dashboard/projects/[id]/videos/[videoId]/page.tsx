@@ -15,7 +15,13 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AI_MODELS, SCRIPT_RECOMMENDED_IDS, THUMBNAIL_IMAGE_MODELS } from "@/types/ai";
-import { DURATION_PRESETS, countWords, estimatedMinutes } from "@/lib/scriptUtils";
+import {
+  DURATION_PRESETS,
+  FRAGMENT_MAX_WORDS,
+  countWords,
+  estimatedMinutes,
+  type FragmentSplitMode,
+} from "@/lib/scriptUtils";
 import { ScriptFragmentsTable } from "@/components/ScriptFragmentsTable";
 import { ScriptTimeline } from "@/components/ScriptTimeline";
 import {
@@ -101,6 +107,7 @@ export default function VideoEditorPage() {
   );
   const [thumbWordStyle, setThumbWordStyle] = useState<"preset" | "few" | "many">("preset");
   const [sceneImageModelId, setSceneImageModelId] = useState("black-forest-labs/flux.2-pro");
+  const [fragmentSplitMode, setFragmentSplitMode] = useState<FragmentSplitMode>("range");
   const [sceneImageLoading, setSceneImageLoading] = useState<number | null>(null);
   const [sceneImageError, setSceneImageError] = useState<string | null>(null);
   const [storageMode, setStorageModeState] = useState<"cloud" | "local">("cloud");
@@ -717,12 +724,30 @@ export default function VideoEditorPage() {
                       {sceneImageError}
                     </p>
                   )}
+                  <div className="flex flex-wrap items-center gap-3 mb-4">
+                    <label className="text-xs font-medium text-[rgb(var(--text-muted))] shrink-0">
+                      Cómo dividir el guion en escenas:
+                    </label>
+                    <select
+                      value={fragmentSplitMode}
+                      onChange={(e) => setFragmentSplitMode(e.target.value as FragmentSplitMode)}
+                      className="rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--bg-muted))] px-3 py-2 text-sm text-[rgb(var(--text-primary))] focus:outline-none focus:ring-2 focus:ring-[rgb(var(--accent))] max-w-full"
+                    >
+                      <option value="range">
+                        Rango fijo (máx. {FRAGMENT_MAX_WORDS} palabras por escena)
+                      </option>
+                      <option value="punctuation">
+                        Por signos de puntuación (frases u oraciones)
+                      </option>
+                    </select>
+                  </div>
                   <div className="mb-6">
                     <h3 className="text-sm font-medium text-[rgb(var(--text-primary))] mb-2">
                       Timeline del script
                     </h3>
                     <ScriptTimeline
                       scriptContent={scriptContentForFragments}
+                      fragmentSplitMode={fragmentSplitMode}
                       sceneImageModelId={sceneImageModelId}
                       onSceneImageModelChange={setSceneImageModelId}
                       onGenerateScene={handleGenerateScene}
@@ -736,6 +761,7 @@ export default function VideoEditorPage() {
                   <div className="overflow-x-auto max-h-[520px] overflow-y-auto">
                     <ScriptFragmentsTable
                       scriptContent={scriptContentForFragments}
+                      fragmentSplitMode={fragmentSplitMode}
                       sceneImageModelId={sceneImageModelId}
                       onSceneImageModelChange={setSceneImageModelId}
                       onGenerateScene={handleGenerateScene}

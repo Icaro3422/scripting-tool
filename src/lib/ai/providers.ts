@@ -7,7 +7,12 @@ export type Message = { role: "user" | "assistant" | "system"; content: string }
 
 export type ChatCompletionOptions = { max_tokens?: number };
 
-export type UsageInfo = { prompt_tokens: number; completion_tokens: number };
+export type UsageInfo = {
+  prompt_tokens: number;
+  completion_tokens: number;
+  /** USD desde OpenRouter `usage.cost` */
+  cost_usd?: number;
+};
 
 function getOpenAI(): OpenAI | null {
   const key = process.env.OPENAI_API_KEY;
@@ -180,7 +185,7 @@ export async function chatCompletionWithUsage(
     if (!res.ok) throw new Error(`OpenRouter: ${res.status} ${raw.slice(0, 200)}`);
     let data: {
       choices?: { message?: { content?: string } }[];
-      usage?: { prompt_tokens?: number; completion_tokens?: number };
+      usage?: { prompt_tokens?: number; completion_tokens?: number; cost?: number };
     };
     try {
       data = JSON.parse(raw);
@@ -188,9 +193,16 @@ export async function chatCompletionWithUsage(
       throw new Error(`OpenRouter devolvió una respuesta no válida.`);
     }
     const content = data.choices?.[0]?.message?.content ?? "";
+    const pt = data.usage?.prompt_tokens;
+    const ct = data.usage?.completion_tokens;
+    const costUsd = typeof data.usage?.cost === "number" ? data.usage.cost : undefined;
     const usage =
-      data.usage?.prompt_tokens != null && data.usage?.completion_tokens != null
-        ? { prompt_tokens: data.usage.prompt_tokens, completion_tokens: data.usage.completion_tokens }
+      pt != null && ct != null
+        ? {
+            prompt_tokens: pt,
+            completion_tokens: ct,
+            ...(costUsd != null ? { cost_usd: costUsd } : {}),
+          }
         : undefined;
     return { content, usage };
   }
