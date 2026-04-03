@@ -15,9 +15,11 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AI_MODELS, SCRIPT_RECOMMENDED_IDS, THUMBNAIL_IMAGE_MODELS } from "@/types/ai";
-import { DURATION_PRESETS, countWords, estimatedMinutes } from "@/lib/scriptUtils";
+import { DURATION_PRESETS } from "@/lib/scriptUtils";
+import { countWords, estimatedMinutes, type SplitConfigState } from "@/lib/text-processing";
 import { ScriptFragmentsTable } from "@/components/ScriptFragmentsTable";
 import { ScriptTimeline } from "@/components/ScriptTimeline";
+import { ScriptSplitConfig } from "@/components/ScriptSplitConfig";
 import {
   getStorageMode,
   setLocalThumbPath,
@@ -105,6 +107,17 @@ export default function VideoEditorPage() {
   const [sceneImageError, setSceneImageError] = useState<string | null>(null);
   const [storageMode, setStorageModeState] = useState<"cloud" | "local">("cloud");
   const [localFolderName, setLocalFolderNameState] = useState<string | null>(null);
+  
+  // Dynamic split method state (Iteration 1)
+  const [splitConfig, setSplitConfig] = useState<SplitConfigState>({
+    method: "strict",
+    targetChunks: 10,
+    strictMinWords: 15,
+    strictMaxWords: 21,
+  });
+
+  // Derived value for components that need just the method
+  const splitMethod = splitConfig.method;
 
   useEffect(() => {
     setStorageModeState(getStorageMode());
@@ -728,8 +741,18 @@ export default function VideoEditorPage() {
                       onGenerateScene={handleGenerateScene}
                       sceneImages={sceneImages}
                       sceneLoadingIndex={sceneImageLoading}
+                      splitMethod={splitMethod}
+                      splitConfig={splitConfig}
                     />
                   </div>
+                  <ScriptSplitConfig
+                    scriptContent={scriptContentForFragments}
+                    initialMethod={splitMethod}
+                    initialConfig={splitConfig}
+                    onMethodChange={(_method, config) => {
+                      setSplitConfig(config);
+                    }}
+                  />
                   <h3 className="text-sm font-medium text-[rgb(var(--text-primary))] mb-2">
                     Tabla de fragmentos (copiar bloques)
                   </h3>
@@ -741,6 +764,8 @@ export default function VideoEditorPage() {
                       onGenerateScene={handleGenerateScene}
                       sceneImages={sceneImages}
                       sceneLoadingIndex={sceneImageLoading}
+                      splitMethod={splitMethod}
+                      splitConfig={splitConfig}
                     />
                   </div>
                 </>
