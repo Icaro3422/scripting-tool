@@ -103,5 +103,3 @@ export function splitByMethod(
 // Compatibility alias for existing API (estimatedMinutes)
 export { estimatedMinutes } from "./stats";
 
-// Re-export constant from scriptUtils to avoid duplication
-export { WORDS_PER_MINUTE } from "@/lib/scriptUtils";

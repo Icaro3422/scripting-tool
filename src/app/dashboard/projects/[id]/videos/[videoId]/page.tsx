@@ -16,6 +16,7 @@ import {
 import { cn } from "@/lib/utils";
 import { AI_MODELS, SCRIPT_RECOMMENDED_IDS, THUMBNAIL_IMAGE_MODELS } from "@/types/ai";
 import { DURATION_PRESETS, countWords, estimatedMinutes } from "@/lib/scriptUtils";
+import { type SplitConfigState } from "@/lib/text-processing";
 import { ScriptFragmentsTable } from "@/components/ScriptFragmentsTable";
 import { ScriptTimeline } from "@/components/ScriptTimeline";
 import { ScriptSplitConfig } from "@/components/ScriptSplitConfig";
@@ -108,8 +109,8 @@ export default function VideoEditorPage() {
   const [localFolderName, setLocalFolderNameState] = useState<string | null>(null);
   
   // Dynamic split method state (Iteration 1)
-  const [splitConfig, setSplitConfig] = useState({
-    method: "strict" as "strict" | "count",
+  const [splitConfig, setSplitConfig] = useState<SplitConfigState>({
+    method: "strict",
     targetChunks: 10,
     strictMinWords: 15,
     strictMaxWords: 21,

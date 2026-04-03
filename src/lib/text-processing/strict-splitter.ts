@@ -37,9 +37,9 @@ export function strictSplit(
 
   const fragments = fragmentarEstricto(text, minP, maxP);
 
-  return fragments.map((text, index) => ({
+  return fragments.map((fragmentText, index) => ({
     id: index + 1,
-    text,
+    text: fragmentText,
   }));
 }
 
