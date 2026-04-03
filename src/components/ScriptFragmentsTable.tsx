@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useMemo } from "react";
-import { splitByMethod, type SplitMethod, type SplitConfigState } from "@/lib/text-processing";
+import { splitByMethod, type SplitMethod, type SplitConfigState, type PromptResult } from "@/lib/text-processing";
 import { ImageIcon, Copy, Check, Loader2 } from "lucide-react";
 import { LocalThumbnailImage } from "@/components/LocalThumbnailImage";
 import { LOCAL_URL_PREFIX } from "@/lib/client-storage";
@@ -33,6 +33,10 @@ interface ScriptFragmentsTableProps {
   // Nuevas props para método de división dinámica
   splitMethod?: SplitMethod;
   splitConfig?: SplitConfigState;
+  /** Generated image prompts mapped by fragment_id (1-based) */
+  prompts?: PromptResult[];
+  /** Callback when a prompt is edited inline */
+  onPromptChange?: (fragmentId: number, newPrompt: string) => void;
 }
 
 export function ScriptFragmentsTable({
@@ -44,9 +48,25 @@ export function ScriptFragmentsTable({
   sceneLoadingIndex = null,
   splitMethod = "strict",
   splitConfig,
+  prompts,
+  onPromptChange,
 }: ScriptFragmentsTableProps) {
   const [copiedBlock, setCopiedBlock] = useState<number | null>(null);
   const [previewSceneIndex, setPreviewSceneIndex] = useState<number | null>(null);
+
+  // Local editable prompts state
+  const [editedPrompts, setEditedPrompts] = useState<Record<number, string>>({});
+
+  // Build a lookup map for prompts by fragment_id
+  const promptMap = useMemo(() => {
+    const map = new Map<number, string>();
+    if (prompts) {
+      for (const p of prompts) {
+        map.set(p.fragment_id, p.image_prompt);
+      }
+    }
+    return map;
+  }, [prompts]);
 
   // Determinar método de división
   const fragmentos = useMemo(() => {
@@ -68,9 +88,28 @@ export function ScriptFragmentsTable({
     });
   }
 
+  function handlePromptEdit(fragmentId: number, value: string) {
+    setEditedPrompts((prev) => ({ ...prev, [fragmentId]: value }));
+  }
+
+  function handlePromptBlur(fragmentId: number) {
+    const edited = editedPrompts[fragmentId];
+    if (edited !== undefined) {
+      onPromptChange?.(fragmentId, edited);
+    }
+  }
+
+  function getPromptForFragment(fragmentId: number): string | undefined {
+    // Check local edits first, then fall back to original prompts
+    if (editedPrompts[fragmentId] !== undefined) {
+      return editedPrompts[fragmentId];
+    }
+    return promptMap.get(fragmentId);
+  }
+
   if (fragmentos.length === 0) return null;
 
-  const rows: { index: number; text: string; words: number; showCopyButton: boolean; copyFrom: number; copyTo: number }[] = [];
+  const rows: { index: number; text: string; words: number; showCopyButton: boolean; copyFrom: number; copyTo: number; prompt?: string }[] = [];
   for (let i = 0; i < fragmentos.length; i++) {
     const text = fragmentos[i];
     const words = text.split(/\s+/).filter(Boolean).length;
@@ -86,8 +125,11 @@ export function ScriptFragmentsTable({
       showCopyButton,
       copyFrom,
       copyTo,
+      prompt: getPromptForFragment(i + 1),
     });
   }
+
+  const hasPrompts = rows.some((r) => r.prompt);
 
   return (
     <div className="space-y-4">
@@ -117,6 +159,9 @@ export function ScriptFragmentsTable({
               <th className="text-left py-3 px-4 font-medium text-[rgb(var(--text-primary))] w-12">#</th>
               <th className="text-left py-3 px-4 font-medium text-[rgb(var(--text-primary))]">Texto del fragmento</th>
               <th className="text-left py-3 px-4 font-medium text-[rgb(var(--text-primary))] w-20">Palabras</th>
+              {hasPrompts && (
+                <th className="text-left py-3 px-4 font-medium text-[rgb(var(--text-primary))] min-w-[200px]">Prompt de imagen</th>
+              )}
               <th className="text-left py-3 px-4 font-medium text-[rgb(var(--text-primary))] w-32">Copiar bloque</th>
               <th className="text-left py-3 px-4 font-medium text-[rgb(var(--text-primary))] w-36">Generar escena</th>
             </tr>
@@ -130,6 +175,21 @@ export function ScriptFragmentsTable({
                 <td className="py-2.5 px-4 text-[rgb(var(--text-muted))]">{row.index}</td>
                 <td className="py-2.5 px-4 text-[rgb(var(--text-primary))]">{row.text}</td>
                 <td className="py-2.5 px-4 text-[rgb(var(--text-muted))] font-medium">{row.words}</td>
+                {hasPrompts && (
+                  <td className="py-2.5 px-4">
+                    {row.prompt ? (
+                      <textarea
+                        value={row.prompt}
+                        onChange={(e) => handlePromptEdit(row.index, e.target.value)}
+                        onBlur={() => handlePromptBlur(row.index)}
+                        rows={2}
+                        className="w-full rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--bg-muted))] px-2 py-1.5 text-xs text-[rgb(var(--text-primary))] placeholder:text-[rgb(var(--text-muted))] focus:outline-none focus:ring-2 focus:ring-[rgb(var(--accent))] resize-none"
+                      />
+                    ) : (
+                      <span className="text-xs text-[rgb(var(--text-muted))] italic">Sin prompt</span>
+                    )}
+                  </td>
+                )}
                 <td className="py-2.5 px-4">
                   {row.showCopyButton && (
                     <button
