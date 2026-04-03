@@ -15,8 +15,8 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AI_MODELS, SCRIPT_RECOMMENDED_IDS, THUMBNAIL_IMAGE_MODELS } from "@/types/ai";
-import { DURATION_PRESETS, countWords, estimatedMinutes } from "@/lib/scriptUtils";
-import { type SplitConfigState } from "@/lib/text-processing";
+import { DURATION_PRESETS } from "@/lib/scriptUtils";
+import { countWords, estimatedMinutes, type SplitConfigState } from "@/lib/text-processing";
 import { ScriptFragmentsTable } from "@/components/ScriptFragmentsTable";
 import { ScriptTimeline } from "@/components/ScriptTimeline";
 import { ScriptSplitConfig } from "@/components/ScriptSplitConfig";

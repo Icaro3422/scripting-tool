@@ -29,6 +29,15 @@ const DEFAULT_CONFIG: SplitConfigState = {
   strictMaxWords: 21,
 };
 
+/**
+ * Safely parse a number input value, distinguishing empty/NaN from 0.
+ */
+function parseNumberInput(value: string, fallback: number): number {
+  if (value === "") return fallback;
+  const parsed = Number(value);
+  return Number.isNaN(parsed) ? fallback : parsed;
+}
+
 export function ScriptSplitConfig({
   scriptContent,
   onMethodChange,
@@ -91,10 +100,11 @@ export function ScriptSplitConfig({
         </h3>
       </div>
 
-      {/* Selector de método */}
-      <div className="flex gap-2 mb-4">
+      {/* Method selector toggle */}
+      <div className="flex gap-2 mb-4" role="group" aria-label="Split method">
         <button
           type="button"
+          aria-pressed={config.method === "strict"}
           onClick={() => handleMethodChange("strict")}
           className={cn(
             "flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition",
@@ -108,6 +118,7 @@ export function ScriptSplitConfig({
         </button>
         <button
           type="button"
+          aria-pressed={config.method === "count"}
           onClick={() => handleMethodChange("count")}
           className={cn(
             "flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition",
@@ -121,13 +132,14 @@ export function ScriptSplitConfig({
         </button>
       </div>
 
-      {/* Configuración adicional según método */}
+      {/* Additional config per method */}
       {config.method === "count" && (
         <div className="flex flex-wrap items-center gap-3 mb-4">
-          <label className="text-sm text-[rgb(var(--text-muted))]">
+          <label htmlFor="targetChunks" className="text-sm text-[rgb(var(--text-muted))]">
             Número de escenas:
           </label>
           <input
+            id="targetChunks"
             type="number"
             min={2}
             max={50}
@@ -135,7 +147,7 @@ export function ScriptSplitConfig({
             onChange={(e) =>
               handleConfigChange(
                 "targetChunks",
-                Math.max(2, Math.min(50, Number(e.target.value) || 10))
+                Math.max(2, Math.min(50, parseNumberInput(e.target.value, 10)))
               )
             }
             className="w-20 rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--bg-muted))] px-2 py-1.5 text-sm text-[rgb(var(--text-primary))] focus:outline-none focus:ring-2 focus:ring-[rgb(var(--accent))]"
@@ -145,10 +157,11 @@ export function ScriptSplitConfig({
 
       {config.method === "strict" && (
         <div className="flex flex-wrap items-center gap-3 mb-4">
-          <label className="text-sm text-[rgb(var(--text-muted))]">
+          <label htmlFor="strictMinWords" className="text-sm text-[rgb(var(--text-muted))]">
             Palabras por escena:
           </label>
           <input
+            id="strictMinWords"
             type="number"
             min={5}
             max={30}
@@ -156,13 +169,14 @@ export function ScriptSplitConfig({
             onChange={(e) =>
               handleConfigChange(
                 "strictMinWords",
-                Math.max(5, Math.min(30, Number(e.target.value) || 15))
+                Math.max(5, Math.min(30, parseNumberInput(e.target.value, 15)))
               )
             }
             className="w-20 rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--bg-muted))] px-2 py-1.5 text-sm text-[rgb(var(--text-primary))] focus:outline-none focus:ring-2 focus:ring-[rgb(var(--accent))]"
           />
           <span className="text-sm text-[rgb(var(--text-muted))]">a</span>
           <input
+            id="strictMaxWords"
             type="number"
             min={5}
             max={35}
@@ -170,7 +184,7 @@ export function ScriptSplitConfig({
             onChange={(e) =>
               handleConfigChange(
                 "strictMaxWords",
-                Math.max(5, Math.min(35, Number(e.target.value) || 21))
+                Math.max(5, Math.min(35, parseNumberInput(e.target.value, 21)))
               )
             }
             className="w-20 rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--bg-muted))] px-2 py-1.5 text-sm text-[rgb(var(--text-primary))] focus:outline-none focus:ring-2 focus:ring-[rgb(var(--accent))]"

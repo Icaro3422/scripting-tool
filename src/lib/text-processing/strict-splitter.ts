@@ -21,9 +21,9 @@ export function strictSplit(
   text: string,
   options?: StrictSplitOptions
 ): ScriptFragment[] {
-  // Normalize range: ensure min <= max and valid values
-  let minP = options?.minWords ?? DEFAULT_MIN_WORDS;
-  let maxP = options?.maxWords ?? DEFAULT_MAX_WORDS;
+  // Normalize range: ensure integers, positive, and min <= max
+  let minP = Math.floor(options?.minWords ?? DEFAULT_MIN_WORDS);
+  let maxP = Math.floor(options?.maxWords ?? DEFAULT_MAX_WORDS);
 
   // Ensure positive values
   if (minP < 1) minP = 1;
@@ -44,7 +44,7 @@ export function strictSplit(
 }
 
 /**
- * Factory function para crear un divisor estricto con opciones por defecto
+ * Factory function to create a strict splitter with default options
  */
 export function createStrictSplitter(defaultOptions?: StrictSplitOptions) {
   return (text: string, options?: StrictSplitOptions): ScriptFragment[] => {
