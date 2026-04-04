@@ -72,9 +72,18 @@ interface Preset {
 }
 
 export default function VideoEditorPage() {
-  const params = useParams();
-  const projectId = params.id as string;
-  const videoId = params.videoId as string;
+  const params = useParams<{ id: string; videoId: string }>();
+  const projectId = params?.id;
+  const videoId = params?.videoId;
+
+  // Guard against missing params
+  if (!projectId || !videoId) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <p className="text-[rgb(var(--text-muted))]">Video no encontrado</p>
+      </div>
+    );
+  }
   const [video, setVideo] = useState<Video | null>(null);
   const [presets, setPresets] = useState<Preset[]>([]);
   const [aiModels, setAiModels] = useState<AIModelItem[]>([]);
@@ -364,12 +373,8 @@ export default function VideoEditorPage() {
       if (type === "title") setGeneratedTitle(generated);
       if (type === "description") setGeneratedDescription(generated);
       if (type === "tags" && Array.isArray(data.tags)) setGeneratedTags(data.tags);
-      if (data.script) {
-        if (!data.script || typeof data.script !== "object" || !("id" in data.script)) {
-        setError("Respuesta inválida del servidor");
-        return;
-      }
-      const newScript = data.script as Script;
+      if (data.script && typeof data.script === "object" && "id" in data.script) {
+        const newScript = data.script as Script;
         setVideo((prev) =>
           prev ? { ...prev, scripts: [newScript, ...prev.scripts] } : null
         );
@@ -566,11 +571,10 @@ export default function VideoEditorPage() {
   ];
 
   const latestScript = video.scripts[0];
-  const scriptContentForFragments = (
-    generatedScript ??
-    latestScript?.content ??
-    ""
-  ).trim();
+  const scriptContentForFragments = useMemo(
+    () => (generatedScript ?? latestScript?.content ?? "").trim(),
+    [generatedScript, latestScript?.content]
+  );
   const allScriptModels = aiModels.length
     ? aiModels
     : AI_MODELS.map((m) => ({
@@ -589,10 +593,13 @@ export default function VideoEditorPage() {
     return (a.name ?? a.id).localeCompare(b.name ?? b.id);
   });
 
-  const sceneImages: Record<number, { id: string; blobUrl: string }> = {};
-  video.thumbnails.forEach((t) => {
-    if (t.fragmentIndex != null) sceneImages[t.fragmentIndex] = { id: t.id, blobUrl: t.blobUrl };
-  });
+  const sceneImages = useMemo(() => {
+    const map: Record<number, { id: string; blobUrl: string }> = {};
+    video.thumbnails.forEach((t) => {
+      if (t.fragmentIndex != null) map[t.fragmentIndex] = { id: t.id, blobUrl: t.blobUrl };
+    });
+    return map;
+  }, [video.thumbnails]);
 
   return (
     <div className="p-8 max-w-4xl">
