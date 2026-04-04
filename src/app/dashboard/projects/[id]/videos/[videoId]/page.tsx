@@ -429,7 +429,9 @@ export default function VideoEditorPage() {
         setPromptsError(data.error || detailsMsg || "Error al generar prompts");
         return;
       }
-      setGeneratedPrompts(data.results as PromptResult[]);
+      if (Array.isArray(data.results)) {
+        setGeneratedPrompts(data.results as PromptResult[]);
+      }
     } catch (e) {
       setPromptsError(e instanceof Error ? e.message : "Error");
     } finally {
