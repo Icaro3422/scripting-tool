@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { auth } from "@clerk/nextjs/server";
 import Groq from "groq-sdk";
 import { z } from "zod";
 
@@ -223,7 +224,21 @@ export async function POST(request: Request): Promise<Response> {
       allResults.push(...batchResults);
     }
 
-    const results = allResults.sort((a, b) => a.fragment_id - b.fragment_id);
+    // Validate that all requested fragment IDs are present exactly once
+    const requestedIds = new Set(parsedBody.data.fragments.map((f) => f.id));
+    const resultIds = new Set(allResults.map((r) => r.fragment_id));
+
+    // Check for missing or extra IDs
+    for (const id of requestedIds) {
+      if (!resultIds.has(id)) {
+        throw new Error(`Model output missing fragment_id: ${id}`);
+      }
+    }
+
+    // Filter to only requested IDs and sort
+    const results = allResults
+      .filter((r) => requestedIds.has(r.fragment_id))
+      .sort((a, b) => a.fragment_id - b.fragment_id);
 
     return NextResponse.json({ results }, { status: 200 });
   } catch (error: unknown) {

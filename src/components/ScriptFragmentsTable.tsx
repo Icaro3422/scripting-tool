@@ -177,7 +177,7 @@ export function ScriptFragmentsTable({
                 <td className="py-2.5 px-4 text-[rgb(var(--text-muted))] font-medium">{row.words}</td>
                 {hasPrompts && (
                   <td className="py-2.5 px-4">
-                    {row.prompt ? (
+                    {row.prompt !== undefined && row.prompt !== null ? (
                       <textarea
                         value={row.prompt}
                         onChange={(e) => handlePromptEdit(row.index, e.target.value)}

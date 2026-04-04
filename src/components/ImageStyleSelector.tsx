@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { IMAGE_STYLES } from "@/lib/text-processing";
 
 interface ImageStyleSelectorProps {
@@ -17,8 +17,12 @@ export function ImageStyleSelector({
   disabled = false,
 }: ImageStyleSelectorProps) {
   const [isCustom, setIsCustom] = useState(false);
+  const userSelectedCustom = useRef(false);
 
   useEffect(() => {
+    // Don't override if user explicitly selected custom
+    if (userSelectedCustom.current) return;
+
     if (value === "") {
       setIsCustom(false);
     } else if (!IMAGE_STYLES.includes(value as (typeof IMAGE_STYLES)[number])) {
@@ -42,9 +46,11 @@ export function ImageStyleSelector({
           value={isCustom ? CUSTOM_OPTION : value}
           onChange={(e) => {
             if (e.target.value === CUSTOM_OPTION) {
+              userSelectedCustom.current = true;
               setIsCustom(true);
               onChange("");
             } else {
+              userSelectedCustom.current = false;
               setIsCustom(false);
               onChange(e.target.value);
             }

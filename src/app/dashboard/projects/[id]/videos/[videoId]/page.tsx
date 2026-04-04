@@ -807,7 +807,7 @@ export default function VideoEditorPage() {
                   {/* Image prompt generation */}
                   <div className="rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--bg-surface))] p-4 space-y-4">
                     <h3 className="text-sm font-medium text-[rgb(var(--text-primary))]">
-                      Generate image prompts
+                      Generar prompts de imagen
                     </h3>
                     <ImageStyleSelector
                       value={imageStyle}
@@ -827,7 +827,7 @@ export default function VideoEditorPage() {
                       ) : (
                         <Sparkles className="h-4 w-4" />
                       )}
-                      Generate prompts
+                      Generar prompts
                     </button>
                   </div>
 
@@ -845,6 +845,13 @@ export default function VideoEditorPage() {
                       splitMethod={splitMethod}
                       splitConfig={splitConfig}
                       prompts={generatedPrompts}
+                      onPromptChange={(fragmentId, newPrompt) => {
+                        setGeneratedPrompts((prev) =>
+                          prev.map((p) =>
+                            p.fragment_id === fragmentId ? { ...p, image_prompt: newPrompt } : p
+                          )
+                        );
+                      }}
                     />
                   </div>
                 </>
