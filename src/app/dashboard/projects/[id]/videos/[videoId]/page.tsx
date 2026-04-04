@@ -1,7 +1,7 @@
 "use client";
 
 import { useParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import {
   FileText,
@@ -16,10 +16,11 @@ import {
 import { cn } from "@/lib/utils";
 import { AI_MODELS, SCRIPT_RECOMMENDED_IDS, THUMBNAIL_IMAGE_MODELS } from "@/types/ai";
 import { DURATION_PRESETS } from "@/lib/scriptUtils";
-import { countWords, estimatedMinutes, type SplitConfigState } from "@/lib/text-processing";
+import { countWords, estimatedMinutes, type SplitConfigState, type PromptResult } from "@/lib/text-processing";
 import { ScriptFragmentsTable } from "@/components/ScriptFragmentsTable";
 import { ScriptTimeline } from "@/components/ScriptTimeline";
 import { ScriptSplitConfig } from "@/components/ScriptSplitConfig";
+import { ImageStyleSelector } from "@/components/ImageStyleSelector";
 import {
   getStorageMode,
   setLocalThumbPath,
@@ -118,6 +119,12 @@ export default function VideoEditorPage() {
 
   // Derived value for components that need just the method
   const splitMethod = splitConfig.method;
+
+  // Image prompt generation state (Iteration 2)
+  const [imageStyle, setImageStyle] = useState("");
+  const [generatedPrompts, setGeneratedPrompts] = useState<PromptResult[]>([]);
+  const [promptsLoading, setPromptsLoading] = useState(false);
+  const [promptsError, setPromptsError] = useState<string | null>(null);
 
   useEffect(() => {
     setStorageModeState(getStorageMode());
@@ -375,6 +382,57 @@ export default function VideoEditorPage() {
       setError(e instanceof Error ? e.message : "Error");
     } finally {
       setLoading(false);
+    }
+  }
+
+  const handlePromptChange = useCallback((fragmentId: number, newPrompt: string) => {
+    setGeneratedPrompts((prev) =>
+      prev.map((p) =>
+        p.fragment_id === fragmentId ? { ...p, image_prompt: newPrompt } : p
+      )
+    );
+  }, []);
+
+  async function handleGeneratePrompts() {
+    if (!scriptContentForFragments.trim()) {
+      setPromptsError("Genera un script primero.");
+      return;
+    }
+    if (!imageStyle.trim()) {
+      setPromptsError("Selecciona un estilo de imagen.");
+      return;
+    }
+    setPromptsLoading(true);
+    setPromptsError(null);
+    try {
+      // Split the script to get fragments with IDs
+      const { splitByMethod } = await import("@/lib/text-processing");
+      const method = splitConfig.method;
+      const fragments = splitByMethod(scriptContentForFragments, method, {
+        minWords: splitConfig.strictMinWords,
+        maxWords: splitConfig.strictMaxWords,
+        targetChunks: splitConfig.targetChunks,
+      });
+
+      const res = await fetch("/api/prompts/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fragments: fragments.map((f) => ({ id: f.id, text: f.text })),
+          style: imageStyle,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        const detailsMsg = typeof data.details === "object" ? JSON.stringify(data.details) : data.details;
+        setPromptsError(data.error || detailsMsg || "Error al generar prompts");
+        return;
+      }
+      setGeneratedPrompts(data.results as PromptResult[]);
+    } catch (e) {
+      setPromptsError(e instanceof Error ? e.message : "Error");
+    } finally {
+      setPromptsLoading(false);
     }
   }
 
@@ -753,6 +811,34 @@ export default function VideoEditorPage() {
                       setSplitConfig(config);
                     }}
                   />
+
+                  {/* Image prompt generation */}
+                  <div className="rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--bg-surface))] p-4 space-y-4">
+                    <h3 className="text-sm font-medium text-[rgb(var(--text-primary))]">
+                      Generar prompts de imagen
+                    </h3>
+                    <ImageStyleSelector
+                      value={imageStyle}
+                      onChange={setImageStyle}
+                    />
+                    {promptsError && (
+                      <p className="text-sm text-red-600 dark:text-red-400">{promptsError}</p>
+                    )}
+                    <button
+                      type="button"
+                      onClick={handleGeneratePrompts}
+                      disabled={promptsLoading || !scriptContentForFragments.trim()}
+                      className="rounded-lg bg-[rgb(var(--accent))] px-4 py-2.5 text-white font-medium hover:opacity-90 disabled:opacity-50 flex items-center gap-2"
+                    >
+                      {promptsLoading ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Sparkles className="h-4 w-4" />
+                      )}
+                      Generar prompts
+                    </button>
+                  </div>
+
                   <h3 className="text-sm font-medium text-[rgb(var(--text-primary))] mb-2">
                     Tabla de fragmentos (copiar bloques)
                   </h3>
@@ -766,6 +852,8 @@ export default function VideoEditorPage() {
                       sceneLoadingIndex={sceneImageLoading}
                       splitMethod={splitMethod}
                       splitConfig={splitConfig}
+                      prompts={generatedPrompts}
+                      onPromptChange={handlePromptChange}
                     />
                   </div>
                 </>
