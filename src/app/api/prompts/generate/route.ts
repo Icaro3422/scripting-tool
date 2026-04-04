@@ -336,7 +336,7 @@ export async function POST(request: Request): Promise<Response> {
       .sort((a, b) => a.fragment_id - b.fragment_id);
 
     console.log(
-      `[prompt-generation] Success: userId=${userId}, fragments=${results.length}, provider=${groq ? "groq" : "openrouter"}`
+      `[prompt-generation] Success: user=${userId.slice(0, 8)}***, fragments=${results.length}, provider=${groq ? "groq" : "openrouter"}`
     );
 
     return NextResponse.json({ results }, { status: 200 });

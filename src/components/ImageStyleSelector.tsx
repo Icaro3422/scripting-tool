@@ -21,7 +21,7 @@ export function ImageStyleSelector({
   // Sync isCustom with value changes
   useEffect(() => {
     // Preset styles should always disable custom mode.
-    if (IMAGE_STYLES.includes(value as (typeof IMAGE_STYLES)[number])) {
+    if ((IMAGE_STYLES as readonly string[]).includes(value)) {
       setIsCustom(false);
       return;
     }
