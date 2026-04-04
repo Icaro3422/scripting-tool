@@ -158,7 +158,7 @@ export function ScriptFragmentsTable({
         </select>
       </div>
       <div className="rounded-xl border border-[rgb(var(--border))] overflow-hidden">
-        <table className="w-full border-collapse text-sm">
+        <table className="w-full border-collapse text-sm" aria-label="Fragmentos del guion">
           <thead>
             <tr className="bg-[rgb(var(--bg-muted))] border-b border-[rgb(var(--border))]">
               <th className="text-left py-3 px-4 font-medium text-[rgb(var(--text-primary))] w-12">#</th>
@@ -182,7 +182,7 @@ export function ScriptFragmentsTable({
                 <td className="py-2.5 px-4 text-[rgb(var(--text-muted))] font-medium">{row.words}</td>
                 {hasPrompts && (
                   <td className="py-2.5 px-4">
-                    {row.prompt !== undefined && row.prompt !== null ? (
+                    {row.prompt !== undefined ? (
                       <textarea
                         value={row.prompt}
                         onChange={(e) => handlePromptEdit(row.index, e.target.value)}

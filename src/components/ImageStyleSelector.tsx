@@ -57,7 +57,8 @@ export function ImageStyleSelector({
             }
           }}
           disabled={disabled}
-          className="w-full rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--bg-muted))] px-3 py-2 text-sm text-[rgb(var(--text-primary))] focus:outline-none focus:ring-2 focus:ring-[rgb(var(--accent))] disabled:opacity-50"
+          className="w-full rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--bg-muted))] px-3 py-2 text-sm text-[rgb(var(--text-primary))] focus:outline-none focus:ring-2 focus:ring-[rgb(var(--accent))] focus:ring-offset-2 focus:ring-offset-[rgb(var(--bg-muted))] disabled:opacity-50"
+          aria-describedby="style-helper"
         >
           <option value="">Seleccionar estilo...</option>
           {IMAGE_STYLES.map((style) => (
