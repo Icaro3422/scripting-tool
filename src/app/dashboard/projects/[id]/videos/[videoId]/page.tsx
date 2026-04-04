@@ -853,13 +853,7 @@ export default function VideoEditorPage() {
                       splitMethod={splitMethod}
                       splitConfig={splitConfig}
                       prompts={generatedPrompts}
-                      onPromptChange={(fragmentId, newPrompt) => {
-                        setGeneratedPrompts((prev) =>
-                          prev.map((p) =>
-                            p.fragment_id === fragmentId ? { ...p, image_prompt: newPrompt } : p
-                          )
-                        );
-                      }}
+                      onPromptChange={handlePromptChange}
                     />
                   </div>
                 </>

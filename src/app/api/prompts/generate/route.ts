@@ -111,6 +111,7 @@ function buildSystemPrompt(style: string): string {
     "Return ONLY valid raw JSON array and nothing else.",
     "Do not include markdown code fences.",
     'Expected format: [{"fragment_id":1,"original_text":"...","image_prompt":"..."}]',
+    'IMPORTANT: The "fragment_id" in your output JSON MUST exactly match the "id" provided in each input fragment. Do not change, reorder, or invent IDs.',
   ].join(" ");
 }
 
