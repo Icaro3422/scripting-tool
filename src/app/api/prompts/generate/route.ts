@@ -27,6 +27,17 @@ const requestSchema = z
     style: z.string().min(1).max(500),
   })
   .superRefine(({ fragments }, ctx) => {
+    // Validate unique fragment IDs
+    const ids = fragments.map((f) => f.id);
+    const uniqueIds = new Set(ids);
+    if (uniqueIds.size !== ids.length) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["fragments"],
+        message: "Los fragmentos deben tener IDs únicos",
+      });
+    }
+
     const totalFragmentChars = fragments.reduce(
       (sum, fragment) => sum + fragment.text.length,
       0,
