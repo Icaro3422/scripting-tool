@@ -76,14 +76,6 @@ export default function VideoEditorPage() {
   const projectId = params?.id;
   const videoId = params?.videoId;
 
-  // Guard against missing params
-  if (!projectId || !videoId) {
-    return (
-      <div className="flex items-center justify-center min-h-screen">
-        <p className="text-[rgb(var(--text-muted))]">Video no encontrado</p>
-      </div>
-    );
-  }
   const [video, setVideo] = useState<Video | null>(null);
   const [presets, setPresets] = useState<Preset[]>([]);
   const [aiModels, setAiModels] = useState<AIModelItem[]>([]);
@@ -553,14 +545,6 @@ export default function VideoEditorPage() {
     }
   }
 
-  if (!video) {
-    return (
-      <div className="p-8 flex items-center gap-2 text-[rgb(var(--text-muted))]">
-        <Loader2 className="h-5 w-5 animate-spin" />
-        Cargando video...
-      </div>
-    );
-  }
 
   const tabs: { id: TabId; label: string; icon: React.ReactNode }[] = [
     { id: "script", label: "Script", icon: <FileText className="h-4 w-4" /> },
@@ -570,7 +554,7 @@ export default function VideoEditorPage() {
     { id: "thumbnail", label: "Miniatura", icon: <ImageIcon className="h-4 w-4" /> },
   ];
 
-  const latestScript = video.scripts[0];
+  const latestScript = video?.scripts?.[0];
   const scriptContentForFragments = useMemo(
     () => (generatedScript ?? latestScript?.content ?? "").trim(),
     [generatedScript, latestScript?.content]
@@ -595,11 +579,29 @@ export default function VideoEditorPage() {
 
   const sceneImages = useMemo(() => {
     const map: Record<number, { id: string; blobUrl: string }> = {};
-    video.thumbnails.forEach((t) => {
+    (video?.thumbnails ?? []).forEach((t) => {
       if (t.fragmentIndex != null) map[t.fragmentIndex] = { id: t.id, blobUrl: t.blobUrl };
     });
     return map;
-  }, [video.thumbnails]);
+  }, [video?.thumbnails]);
+
+  if (!video) {
+    return (
+      <div className="p-8 flex items-center gap-2 text-[rgb(var(--text-muted))]">
+        <Loader2 className="h-5 w-5 animate-spin" />
+        Cargando video...
+      </div>
+    );
+  }
+
+  // Guard against missing params (must be after all hooks)
+  if (!projectId || !videoId) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <p className="text-[rgb(var(--text-muted))]">Video no encontrado</p>
+      </div>
+    );
+  }
 
   return (
     <div className="p-8 max-w-4xl">
