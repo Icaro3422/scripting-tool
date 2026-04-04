@@ -103,3 +103,9 @@ export function splitByMethod(
 // Compatibility alias for existing API (estimatedMinutes)
 export { estimatedMinutes } from "./stats";
 
+// ============================================================================
+// Export Utilities
+// ============================================================================
+
+export { toJsonExport, toCsvExport, downloadFile } from "./exporters";
+
