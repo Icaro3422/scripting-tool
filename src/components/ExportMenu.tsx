@@ -1,6 +1,6 @@
 "use client";
 
-import { Download, FileJson, FileSpreadsheet } from "lucide-react";
+import { FileJson, FileSpreadsheet } from "lucide-react";
 import { type PromptResult, toJsonExport, toCsvExport, downloadFile } from "@/lib/text-processing";
 
 interface ExportMenuProps {
