@@ -423,13 +423,15 @@ export default function VideoEditorPage() {
           style: imageStyle,
         }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => null);
       if (!res.ok) {
-        const detailsMsg = typeof data.details === "object" ? JSON.stringify(data.details) : data.details;
-        setPromptsError(data.error || detailsMsg || "Error al generar prompts");
+        const errorMsg = data && typeof data === "object" && typeof data.error === "string"
+          ? data.error
+          : "Error al generar prompts";
+        setPromptsError(errorMsg);
         return;
       }
-      if (!Array.isArray(data.results)) {
+      if (!data || typeof data !== "object" || !Array.isArray(data.results)) {
         setPromptsError("Respuesta inválida");
         return;
       }
