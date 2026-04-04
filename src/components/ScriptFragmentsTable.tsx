@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { splitByMethod, type SplitMethod, type SplitConfigState, type PromptResult } from "@/lib/text-processing";
 import { ImageIcon, Copy, Check, Loader2 } from "lucide-react";
 import { LocalThumbnailImage } from "@/components/LocalThumbnailImage";
@@ -56,6 +56,11 @@ export function ScriptFragmentsTable({
 
   // Local editable prompts state
   const [editedPrompts, setEditedPrompts] = useState<Record<number, string>>({});
+
+  // Reset edited prompts when the prompt set changes
+  useEffect(() => {
+    setEditedPrompts({});
+  }, [prompts]);
 
   // Build a lookup map for prompts by fragment_id
   const promptMap = useMemo(() => {

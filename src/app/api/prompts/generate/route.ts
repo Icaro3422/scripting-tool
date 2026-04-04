@@ -12,15 +12,33 @@ const openRouterBaseUrl = "https://openrouter.ai/api/v1/chat/completions";
 const openRouterSiteUrl = process.env.OPENROUTER_SITE_URL ?? "http://localhost:3001";
 const openRouterAppName = process.env.OPENROUTER_APP_NAME ?? "Scripting Tool";
 
+const maxFragmentsPerRequest = Number(process.env.MAX_PROMPT_FRAGMENTS_PER_REQUEST ?? 32);
+const maxFragmentTextLength = Number(process.env.MAX_PROMPT_FRAGMENT_TEXT_LENGTH ?? 4000);
+const maxTotalFragmentChars = Number(process.env.MAX_PROMPT_TOTAL_FRAGMENT_CHARS ?? 20000);
+
 const fragmentSchema = z.object({
   id: z.number().int().positive(),
-  text: z.string().min(1),
+  text: z.string().min(1).max(maxFragmentTextLength),
 });
 
-const requestSchema = z.object({
-  fragments: z.array(fragmentSchema).min(1),
-  style: z.string().min(1).max(500),
-});
+const requestSchema = z
+  .object({
+    fragments: z.array(fragmentSchema).min(1).max(maxFragmentsPerRequest),
+    style: z.string().min(1).max(500),
+  })
+  .superRefine(({ fragments }, ctx) => {
+    const totalFragmentChars = fragments.reduce(
+      (sum, fragment) => sum + fragment.text.length,
+      0,
+    );
+    if (totalFragmentChars > maxTotalFragmentChars) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["fragments"],
+        message: `El texto total de los fragmentos no puede exceder ${maxTotalFragmentChars} caracteres`,
+      });
+    }
+  });
 
 const responseItemSchema = z.object({
   fragment_id: z.number().int().positive(),

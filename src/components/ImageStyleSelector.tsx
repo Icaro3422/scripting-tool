@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { IMAGE_STYLES } from "@/lib/text-processing";
 
 interface ImageStyleSelectorProps {
@@ -17,12 +17,9 @@ export function ImageStyleSelector({
   disabled = false,
 }: ImageStyleSelectorProps) {
   const [isCustom, setIsCustom] = useState(false);
-  const prevValueRef = useRef(value);
 
   // Sync isCustom with value changes
   useEffect(() => {
-    const prevValue = prevValueRef.current;
-    prevValueRef.current = value;
 
     // If value changed externally (e.g., reset), re-evaluate
     if (value === "") {
