@@ -5,16 +5,32 @@ import { z } from "zod";
 
 import { type PromptResult } from "@/lib/text-processing";
 
+// ============================================================================
+// Configuration
+// ============================================================================
+
 const model = process.env.GROQ_MODEL ?? "llama3-8b-8192";
-const maxBatchSize = Number(process.env.GROQ_BATCH_SIZE ?? 8);
+const maxBatchSize = Number.isFinite(Number(process.env.GROQ_BATCH_SIZE))
+  ? Number(process.env.GROQ_BATCH_SIZE)
+  : 8;
 const openRouterModel = process.env.OPENROUTER_MODEL ?? "meta-llama/llama-3.3-70b-instruct";
 const openRouterBaseUrl = "https://openrouter.ai/api/v1/chat/completions";
-const openRouterSiteUrl = process.env.OPENROUTER_SITE_URL ?? "http://localhost:3001";
+const openRouterSiteUrl = process.env.OPENROUTER_SITE_URL ?? process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3001";
 const openRouterAppName = process.env.OPENROUTER_APP_NAME ?? "Scripting Tool";
 
-const maxFragmentsPerRequest = Number(process.env.MAX_PROMPT_FRAGMENTS_PER_REQUEST ?? 32);
-const maxFragmentTextLength = Number(process.env.MAX_PROMPT_FRAGMENT_TEXT_LENGTH ?? 4000);
-const maxTotalFragmentChars = Number(process.env.MAX_PROMPT_TOTAL_FRAGMENT_CHARS ?? 20000);
+const maxFragmentsPerRequest = Number.isFinite(Number(process.env.MAX_PROMPT_FRAGMENTS_PER_REQUEST))
+  ? Number(process.env.MAX_PROMPT_FRAGMENTS_PER_REQUEST)
+  : 32;
+const maxFragmentTextLength = Number.isFinite(Number(process.env.MAX_PROMPT_FRAGMENT_TEXT_LENGTH))
+  ? Number(process.env.MAX_PROMPT_FRAGMENT_TEXT_LENGTH)
+  : 4000;
+const maxTotalFragmentChars = Number.isFinite(Number(process.env.MAX_PROMPT_TOTAL_FRAGMENT_CHARS))
+  ? Number(process.env.MAX_PROMPT_TOTAL_FRAGMENT_CHARS)
+  : 20000;
+
+// ============================================================================
+// Zod Schemas
+// ============================================================================
 
 const fragmentSchema = z.object({
   id: z.number().int().positive(),
@@ -27,6 +43,17 @@ const requestSchema = z
     style: z.string().min(1).max(500),
   })
   .superRefine(({ fragments }, ctx) => {
+    // Validate unique fragment IDs
+    const ids = fragments.map((f) => f.id);
+    const uniqueIds = new Set(ids);
+    if (uniqueIds.size !== ids.length) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["fragments"],
+        message: "Los fragmentos deben tener IDs únicos",
+      });
+    }
+
     const totalFragmentChars = fragments.reduce(
       (sum, fragment) => sum + fragment.text.length,
       0,
@@ -46,16 +73,45 @@ const responseItemSchema = z.object({
   image_prompt: z.string().min(1),
 });
 
+// ============================================================================
+// Groq Client Singleton
+// ============================================================================
+
+const groqClient = process.env.GROQ_API_KEY ? new Groq({ apiKey: process.env.GROQ_API_KEY }) : null;
+
+// ============================================================================
+// Helpers
+// ============================================================================
+
+/**
+ * Sanitizes the style string to prevent prompt injection.
+ * Strips control characters, newlines, and XML-like tags.
+ */
+function sanitizeStyle(style: string): string {
+  return style
+    .replace(/[\x00-\x1F\x7F]/g, "") // Remove control characters
+    .replace(/[<>]/g, "") // Remove angle brackets
+    .replace(/<\/?[a-z][^>]*>/gi, "") // Remove XML-like tags
+    .trim()
+    .slice(0, 500); // Enforce max length
+}
+
+/**
+ * Builds the system prompt for image generation with XML-delimited style.
+ */
 function buildSystemPrompt(style: string): string {
+  const sanitized = sanitizeStyle(style);
   return [
     "You are an expert prompt engineer for AI image generation models.",
-    `The selected image style is: ${style}.`,
+    `The selected image style is defined between <style> tags:`,
+    `<style>${sanitized}</style>`,
     "For each input fragment, generate one image prompt in English only.",
     "Prompts must be highly descriptive, cinematic, visual, specific in scene composition, lighting, mood, camera, and materials.",
     "Keep the meaning of the original text, but optimize for visual generation.",
     "Return ONLY valid raw JSON array and nothing else.",
     "Do not include markdown code fences.",
     'Expected format: [{"fragment_id":1,"original_text":"...","image_prompt":"..."}]',
+    'IMPORTANT: The "fragment_id" in your output JSON MUST exactly match the "id" provided in each input fragment. Do not change, reorder, or invent IDs.',
   ].join(" ");
 }
 
@@ -113,23 +169,48 @@ function shouldFallbackToOpenRouter(error: unknown): boolean {
   );
 }
 
+/**
+ * Safely extracts an error message from an unknown payload.
+ */
+function extractErrorMessage(payload: unknown, fallback: string): string {
+  if (typeof payload === "object" && payload !== null && "error" in payload) {
+    const err = payload.error;
+    if (typeof err === "object" && err !== null && "message" in err) {
+      return String(err.message);
+    }
+  }
+  return fallback;
+}
+
+/**
+ * Safely extracts the content from an OpenRouter response payload.
+ */
+function extractOpenRouterContent(payload: unknown): string {
+  if (typeof payload === "object" && payload !== null && "choices" in payload) {
+    const choices = (payload as { choices?: unknown[] }).choices;
+    if (Array.isArray(choices) && choices.length > 0) {
+      const first = choices[0] as { message?: { content?: string } };
+      return first?.message?.content ?? "";
+    }
+  }
+  return "";
+}
+
+// ============================================================================
+// LLM Request Functions
+// ============================================================================
+
 async function requestGroqBatch(
   groq: Groq,
-  style: string,
+  systemPrompt: string,
   batch: { id: number; text: string }[]
 ): Promise<PromptResult[]> {
   const completion = await groq.chat.completions.create({
     model,
     temperature: 0.5,
     messages: [
-      {
-        role: "system",
-        content: buildSystemPrompt(style),
-      },
-      {
-        role: "user",
-        content: JSON.stringify(batch),
-      },
+      { role: "system", content: systemPrompt },
+      { role: "user", content: JSON.stringify(batch) },
     ],
   });
 
@@ -138,7 +219,7 @@ async function requestGroqBatch(
 }
 
 async function requestOpenRouterBatch(
-  style: string,
+  systemPrompt: string,
   batch: { id: number; text: string }[]
 ): Promise<PromptResult[]> {
   if (!process.env.OPENROUTER_API_KEY) {
@@ -157,41 +238,24 @@ async function requestOpenRouterBatch(
       model: openRouterModel,
       temperature: 0.5,
       messages: [
-        {
-          role: "system",
-          content: buildSystemPrompt(style),
-        },
-        {
-          role: "user",
-          content: JSON.stringify(batch),
-        },
+        { role: "system", content: systemPrompt },
+        { role: "user", content: JSON.stringify(batch) },
       ],
     }),
   });
 
   const payload = (await response.json().catch(() => null)) as unknown;
   if (!response.ok) {
-    const message =
-      typeof payload === "object" &&
-      payload !== null &&
-      "error" in payload &&
-      typeof (payload as { error?: unknown }).error === "object" &&
-      (payload as { error: { message?: unknown } }).error?.message
-        ? String((payload as { error: { message?: unknown } }).error.message)
-        : "OpenRouter request failed";
-    throw new Error(message);
+    throw new Error(extractErrorMessage(payload, "OpenRouter request failed"));
   }
 
-  const rawOutput =
-    typeof payload === "object" &&
-    payload !== null &&
-    "choices" in payload &&
-    Array.isArray((payload as { choices?: unknown[] }).choices)
-      ? ((payload as { choices: Array<{ message?: { content?: string } }> }).choices[0]?.message?.content ?? "")
-      : "";
-
+  const rawOutput = extractOpenRouterContent(payload);
   return parseModelJson(rawOutput);
 }
+
+// ============================================================================
+// API Handler
+// ============================================================================
 
 export async function POST(request: Request): Promise<Response> {
   const hasGroq = Boolean(process.env.GROQ_API_KEY);
@@ -204,8 +268,9 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   if (!hasGroq && !hasOpenRouter) {
+    console.error("[prompt-generation] No LLM provider configured");
     return NextResponse.json(
-      { error: "Faltan credenciales del proveedor. Configura GROQ_API_KEY u OPENROUTER_API_KEY." },
+      { error: "Error del servidor: configuración incompleta" },
       { status: 500 }
     );
   }
@@ -214,39 +279,38 @@ export async function POST(request: Request): Promise<Response> {
   const parsedBody = requestSchema.safeParse(body);
 
   if (!parsedBody.success) {
+    console.warn("[prompt-generation] Invalid request payload:", parsedBody.error.flatten());
     return NextResponse.json(
-      {
-        error: "Invalid request payload",
-        details: parsedBody.error.flatten(),
-      },
+      { error: "Solicitud inválida" },
       { status: 400 }
     );
   }
 
-  const groq = hasGroq ? new Groq({ apiKey: process.env.GROQ_API_KEY }) : null;
+  // Use singleton client or create one if needed
+  const groq = groqClient ?? (hasGroq ? new Groq({ apiKey: process.env.GROQ_API_KEY }) : null);
+  const systemPrompt = buildSystemPrompt(parsedBody.data.style);
 
   try {
     const batches = chunkFragments(parsedBody.data.fragments, maxBatchSize);
-    const allResults: PromptResult[] = [];
 
-    for (const batch of batches) {
-      let batchResults: PromptResult[];
-
+    // Process batches in parallel for faster response times
+    const batchPromises = batches.map(async (batch) => {
       if (groq) {
         try {
-          batchResults = await requestGroqBatch(groq, parsedBody.data.style, batch);
+          return await requestGroqBatch(groq, systemPrompt, batch);
         } catch (groqError: unknown) {
           if (!hasOpenRouter || !shouldFallbackToOpenRouter(groqError)) {
             throw groqError;
           }
-          batchResults = await requestOpenRouterBatch(parsedBody.data.style, batch);
+          console.warn("[prompt-generation] Groq failed, falling back to OpenRouter:", groqError);
+          return await requestOpenRouterBatch(systemPrompt, batch);
         }
-      } else {
-        batchResults = await requestOpenRouterBatch(parsedBody.data.style, batch);
       }
+      return await requestOpenRouterBatch(systemPrompt, batch);
+    });
 
-      allResults.push(...batchResults);
-    }
+    const batchResults = await Promise.all(batchPromises);
+    const allResults = batchResults.flat();
 
     // Validate that all requested fragment IDs are present exactly once
     const requestedIds = new Set(parsedBody.data.fragments.map((f) => f.id));
@@ -271,14 +335,18 @@ export async function POST(request: Request): Promise<Response> {
       .filter((r) => requestedIds.has(r.fragment_id))
       .sort((a, b) => a.fragment_id - b.fragment_id);
 
+    console.log(
+      `[prompt-generation] Success: userId=${userId}, fragments=${results.length}, provider=${groq ? "groq" : "openrouter"}`
+    );
+
     return NextResponse.json({ results }, { status: 200 });
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : "Unexpected server error";
+    // Log the real error server-side for debugging
+    console.error("[prompt-generation] Failed:", error);
+
+    // Return a generic message to the client — never leak internal details
     return NextResponse.json(
-      {
-        error: "Failed to generate prompts",
-        details: message,
-      },
+      { error: "Error al generar prompts" },
       { status: 500 }
     );
   }

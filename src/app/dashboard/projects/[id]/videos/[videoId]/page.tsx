@@ -1,7 +1,7 @@
 "use client";
 
 import { useParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import {
   FileText,
@@ -385,6 +385,14 @@ export default function VideoEditorPage() {
       setLoading(false);
     }
   }
+
+  const handlePromptChange = useCallback((fragmentId: number, newPrompt: string) => {
+    setGeneratedPrompts((prev) =>
+      prev.map((p) =>
+        p.fragment_id === fragmentId ? { ...p, image_prompt: newPrompt } : p
+      )
+    );
+  }, []);
 
   async function handleGeneratePrompts() {
     if (!scriptContentForFragments.trim()) {
@@ -846,13 +854,7 @@ export default function VideoEditorPage() {
                       splitMethod={splitMethod}
                       splitConfig={splitConfig}
                       prompts={generatedPrompts}
-                      onPromptChange={(fragmentId, newPrompt) => {
-                        setGeneratedPrompts((prev) =>
-                          prev.map((p) =>
-                            p.fragment_id === fragmentId ? { ...p, image_prompt: newPrompt } : p
-                          )
-                        );
-                      }}
+                      onPromptChange={handlePromptChange}
                     />
                   </div>
                 </>

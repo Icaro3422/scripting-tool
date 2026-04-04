@@ -20,16 +20,19 @@ export function ImageStyleSelector({
 
   // Sync isCustom with value changes
   useEffect(() => {
-
-    // If value changed externally (e.g., reset), re-evaluate
-    if (value === "") {
+    // Preset styles should always disable custom mode.
+    if (IMAGE_STYLES.includes(value as (typeof IMAGE_STYLES)[number])) {
       setIsCustom(false);
-    } else if (IMAGE_STYLES.includes(value as (typeof IMAGE_STYLES)[number])) {
-      setIsCustom(false);
-    } else {
-      // Only set custom if value is non-empty and not a preset
-      setIsCustom(value !== "");
+      return;
     }
+
+    // A non-empty, non-preset value represents a custom style.
+    if (value !== "") {
+      setIsCustom(true);
+    }
+
+    // When value === "", preserve the current mode so selecting
+    // "Personalizado" can clear the textarea without immediately hiding it.
   }, [value]);
 
   return (
@@ -54,7 +57,8 @@ export function ImageStyleSelector({
             }
           }}
           disabled={disabled}
-          className="w-full rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--bg-muted))] px-3 py-2 text-sm text-[rgb(var(--text-primary))] focus:outline-none focus:ring-2 focus:ring-[rgb(var(--accent))] disabled:opacity-50"
+          className="w-full rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--bg-muted))] px-3 py-2 text-sm text-[rgb(var(--text-primary))] focus:outline-none focus:ring-2 focus:ring-[rgb(var(--accent))] focus:ring-offset-2 focus:ring-offset-[rgb(var(--bg-muted))] disabled:opacity-50"
+          aria-describedby="style-helper"
         >
           <option value="">Seleccionar estilo...</option>
           {IMAGE_STYLES.map((style) => (
