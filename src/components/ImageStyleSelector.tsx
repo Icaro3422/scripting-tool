@@ -17,18 +17,21 @@ export function ImageStyleSelector({
   disabled = false,
 }: ImageStyleSelectorProps) {
   const [isCustom, setIsCustom] = useState(false);
-  const userSelectedCustom = useRef(false);
+  const prevValueRef = useRef(value);
 
+  // Sync isCustom with value changes
   useEffect(() => {
-    // Don't override if user explicitly selected custom
-    if (userSelectedCustom.current) return;
+    const prevValue = prevValueRef.current;
+    prevValueRef.current = value;
 
+    // If value changed externally (e.g., reset), re-evaluate
     if (value === "") {
       setIsCustom(false);
-    } else if (!IMAGE_STYLES.includes(value as (typeof IMAGE_STYLES)[number])) {
-      setIsCustom(true);
-    } else {
+    } else if (IMAGE_STYLES.includes(value as (typeof IMAGE_STYLES)[number])) {
       setIsCustom(false);
+    } else {
+      // Only set custom if value is non-empty and not a preset
+      setIsCustom(value !== "");
     }
   }, [value]);
 
@@ -46,11 +49,9 @@ export function ImageStyleSelector({
           value={isCustom ? CUSTOM_OPTION : value}
           onChange={(e) => {
             if (e.target.value === CUSTOM_OPTION) {
-              userSelectedCustom.current = true;
               setIsCustom(true);
               onChange("");
             } else {
-              userSelectedCustom.current = false;
               setIsCustom(false);
               onChange(e.target.value);
             }

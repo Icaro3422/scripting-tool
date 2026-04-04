@@ -181,7 +181,7 @@ export function ScriptFragmentsTable({
                       <textarea
                         value={row.prompt}
                         onChange={(e) => handlePromptEdit(row.index, e.target.value)}
-                        onBlur={() => handlePromptBlur(row.index)}
+                        
                         rows={2}
                         className="w-full rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--bg-muted))] px-2 py-1.5 text-xs text-[rgb(var(--text-primary))] placeholder:text-[rgb(var(--text-muted))] focus:outline-none focus:ring-2 focus:ring-[rgb(var(--accent))] resize-none"
                       />
