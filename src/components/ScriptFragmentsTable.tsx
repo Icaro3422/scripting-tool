@@ -30,7 +30,7 @@ interface ScriptFragmentsTableProps {
   sceneImages?: Record<number, { id: string; blobUrl: string }>;
   /** Índice del fragmento para el que se está generando imagen (muestra loading) */
   sceneLoadingIndex?: number | null;
-  // Nuevas props para método de división dinámica
+  // Dynamic split method props
   splitMethod?: SplitMethod;
   splitConfig?: SplitConfigState;
   /** Generated image prompts mapped by fragment_id (1-based) */

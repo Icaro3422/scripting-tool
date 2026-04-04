@@ -18,7 +18,7 @@ const fragmentSchema = z.object({
 
 const requestSchema = z.object({
   fragments: z.array(fragmentSchema).min(1),
-  style: z.string().min(1),
+  style: z.string().min(1).max(500),
 });
 
 const responseItemSchema = z.object({
