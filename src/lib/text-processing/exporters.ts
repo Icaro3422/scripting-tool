@@ -17,7 +17,7 @@ export function toJsonExport(results: PromptResult[]): string {
  * Escapes a CSV value by wrapping in quotes and escaping internal quotes
  */
 function escapeCsvValue(value: string): string {
-  const escaped = value.replaceAll('"', '""');
+  const escaped = value.replace(/"/g, '""');
   return `"${escaped}"`;
 }
 
@@ -33,7 +33,7 @@ export function toCsvExport(results: PromptResult[]): string {
       escapeCsvValue(item.image_prompt),
     ].join(",")
   );
-  return [header, ...rows].join("\n");
+  return `\ufeff${[header, ...rows].join("\n")}`;
 }
 
 /**
@@ -52,5 +52,7 @@ export function downloadFile(
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  requestAnimationFrame(() => {
+    URL.revokeObjectURL(url);
+  });
 }

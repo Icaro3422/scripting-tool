@@ -9,7 +9,7 @@ interface ExportMenuProps {
 }
 
 export function ExportMenu({ prompts, disabled = false }: ExportMenuProps) {
-  const timestamp = new Date().toISOString().slice(0, 10);
+  const timestamp = new Date().toLocaleDateString("sv-SE");
 
   function handleExportJson() {
     const content = toJsonExport(prompts);
