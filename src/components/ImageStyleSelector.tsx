@@ -20,16 +20,19 @@ export function ImageStyleSelector({
 
   // Sync isCustom with value changes
   useEffect(() => {
-
-    // If value changed externally (e.g., reset), re-evaluate
-    if (value === "") {
+    // Preset styles should always disable custom mode.
+    if (IMAGE_STYLES.includes(value as (typeof IMAGE_STYLES)[number])) {
       setIsCustom(false);
-    } else if (IMAGE_STYLES.includes(value as (typeof IMAGE_STYLES)[number])) {
-      setIsCustom(false);
-    } else {
-      // Only set custom if value is non-empty and not a preset
-      setIsCustom(value !== "");
+      return;
     }
+
+    // A non-empty, non-preset value represents a custom style.
+    if (value !== "") {
+      setIsCustom(true);
+    }
+
+    // When value === "", preserve the current mode so selecting
+    // "Personalizado" can clear the textarea without immediately hiding it.
   }, [value]);
 
   return (
