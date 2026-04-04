@@ -21,6 +21,7 @@ import { ScriptFragmentsTable } from "@/components/ScriptFragmentsTable";
 import { ScriptTimeline } from "@/components/ScriptTimeline";
 import { ScriptSplitConfig } from "@/components/ScriptSplitConfig";
 import { ImageStyleSelector } from "@/components/ImageStyleSelector";
+import { ExportMenu } from "@/components/ExportMenu";
 import {
   getStorageMode,
   setLocalThumbPath,
