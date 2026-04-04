@@ -179,9 +179,15 @@ export async function POST(request: Request): Promise<Response> {
   const hasGroq = Boolean(process.env.GROQ_API_KEY);
   const hasOpenRouter = Boolean(process.env.OPENROUTER_API_KEY);
 
+  // Auth check
+  const { userId } = await auth();
+  if (!userId) {
+    return NextResponse.json({ error: "No autorizado" }, { status: 401 });
+  }
+
   if (!hasGroq && !hasOpenRouter) {
     return NextResponse.json(
-      { error: "Missing provider credentials. Configure GROQ_API_KEY or OPENROUTER_API_KEY." },
+      { error: "Faltan credenciales del proveedor. Configura GROQ_API_KEY u OPENROUTER_API_KEY." },
       { status: 500 }
     );
   }
@@ -226,12 +232,19 @@ export async function POST(request: Request): Promise<Response> {
 
     // Validate that all requested fragment IDs are present exactly once
     const requestedIds = new Set(parsedBody.data.fragments.map((f) => f.id));
-    const resultIds = new Set(allResults.map((r) => r.fragment_id));
+    const resultCounts = new Map<number, number>();
+    for (const result of allResults) {
+      resultCounts.set(result.fragment_id, (resultCounts.get(result.fragment_id) ?? 0) + 1);
+    }
 
-    // Check for missing or extra IDs
+    // Check for missing or duplicate IDs among requested fragments
     for (const id of requestedIds) {
-      if (!resultIds.has(id)) {
-        throw new Error(`Model output missing fragment_id: ${id}`);
+      const count = resultCounts.get(id) ?? 0;
+      if (count === 0) {
+        throw new Error(`Falta fragment_id en la respuesta del modelo: ${id}`);
+      }
+      if (count !== 1) {
+        throw new Error(`El modelo devolvió fragment_id ${id} ${count} veces; se esperaba exactamente 1`);
       }
     }
 
