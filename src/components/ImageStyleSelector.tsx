@@ -1,5 +1,6 @@
 "use client";
 
+import { useState, useEffect } from "react";
 import { IMAGE_STYLES } from "@/lib/text-processing";
 
 interface ImageStyleSelectorProps {
@@ -15,7 +16,17 @@ export function ImageStyleSelector({
   onChange,
   disabled = false,
 }: ImageStyleSelectorProps) {
-  const isCustom = !IMAGE_STYLES.includes(value as (typeof IMAGE_STYLES)[number]) && value !== "";
+  const [isCustom, setIsCustom] = useState(false);
+
+  useEffect(() => {
+    if (value === "") {
+      setIsCustom(false);
+    } else if (!IMAGE_STYLES.includes(value as (typeof IMAGE_STYLES)[number])) {
+      setIsCustom(true);
+    } else {
+      setIsCustom(false);
+    }
+  }, [value]);
 
   return (
     <div className="space-y-2">
@@ -31,8 +42,10 @@ export function ImageStyleSelector({
           value={isCustom ? CUSTOM_OPTION : value}
           onChange={(e) => {
             if (e.target.value === CUSTOM_OPTION) {
+              setIsCustom(true);
               onChange("");
             } else {
+              setIsCustom(false);
               onChange(e.target.value);
             }
           }}

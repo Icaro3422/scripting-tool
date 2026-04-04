@@ -129,7 +129,7 @@ export function ScriptFragmentsTable({
     });
   }
 
-  const hasPrompts = rows.some((r) => r.prompt);
+  const hasPrompts = rows.some((r) => r.prompt !== undefined);
 
   return (
     <div className="space-y-4">

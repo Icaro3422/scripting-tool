@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import Groq from "groq-sdk";
 import { z } from "zod";
 
-import { IMAGE_STYLES, type PromptResult } from "@/lib/text-processing";
+import { type PromptResult } from "@/lib/text-processing";
 
 const model = process.env.GROQ_MODEL ?? "llama3-8b-8192";
 const maxBatchSize = Number(process.env.GROQ_BATCH_SIZE ?? 8);

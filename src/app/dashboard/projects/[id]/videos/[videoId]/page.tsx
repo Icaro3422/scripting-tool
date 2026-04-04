@@ -387,11 +387,11 @@ export default function VideoEditorPage() {
 
   async function handleGeneratePrompts() {
     if (!scriptContentForFragments.trim()) {
-      setPromptsError("Generate a script first.");
+      setPromptsError("Genera un script primero.");
       return;
     }
     if (!imageStyle.trim()) {
-      setPromptsError("Select an image style.");
+      setPromptsError("Selecciona un estilo de imagen.");
       return;
     }
     setPromptsLoading(true);
@@ -416,7 +416,8 @@ export default function VideoEditorPage() {
       });
       const data = await res.json();
       if (!res.ok) {
-        setPromptsError(data.error || data.details || "Error al generar prompts");
+        const detailsMsg = typeof data.details === "object" ? JSON.stringify(data.details) : data.details;
+        setPromptsError(data.error || detailsMsg || "Error al generar prompts");
         return;
       }
       setGeneratedPrompts(data.results as PromptResult[]);
