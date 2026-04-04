@@ -859,6 +859,16 @@ export default function VideoEditorPage() {
                       onPromptChange={handlePromptChange}
                     />
                   </div>
+
+                  {/* Export menu for generated prompts */}
+                  {generatedPrompts.length > 0 && (
+                    <div className="flex items-center justify-between mt-4 pt-4 border-t border-[rgb(var(--border))]">
+                      <p className="text-sm text-[rgb(var(--text-secondary))]">
+                        {generatedPrompts.length} prompts generados
+                      </p>
+                      <ExportMenu prompts={generatedPrompts} />
+                    </div>
+                  )}
                 </>
               ) : (
                 <p className="text-[rgb(var(--text-muted))]">
