@@ -87,7 +87,8 @@ export function ScriptFragmentsTable({
   function handleCopyBlock(from: number, to: number) {
     const lines = fragmentos.slice(from - 1, to).map((t, i) => `${from + i}. ${t}`);
     const text = lines.join("\n");
-    navigator.clipboard.writeText(text).then(() => {
+    navigator.clipboard.writeText(text)
+      .then(() => {
       setCopiedBlock(from);
       setTimeout(() => setCopiedBlock(null), 1500);
     });

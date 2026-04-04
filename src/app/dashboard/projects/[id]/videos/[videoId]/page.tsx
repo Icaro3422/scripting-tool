@@ -138,7 +138,8 @@ export default function VideoEditorPage() {
       fetch(`/api/projects/${projectId}/videos/${videoId}`).then((r) => r.json()),
       fetch("/api/presets").then((r) => r.json()),
       fetch("/api/ai/models").then((r) => r.json()),
-    ]).then(([videoData, presetsData, modelsData]) => {
+    ])
+    .then(([videoData, presetsData, modelsData]) => {
       if (videoData.video) setVideo(videoData.video);
       if (presetsData.presets) setPresets(presetsData.presets);
       if (modelsData.models?.length) {
@@ -200,7 +201,11 @@ export default function VideoEditorPage() {
       };
       if (!win.__scriptingToolDirHandle) {
         try {
-          const handle = await win.showDirectoryPicker!();
+          if (!win.showDirectoryPicker) {
+            setThumbError("Tu navegador no soporta selección de carpetas. Usa Chrome o Edge.");
+            return;
+          }
+          const handle = await win.showDirectoryPicker();
           win.__scriptingToolDirHandle = handle;
           setLocalFolderName(handle.name);
           setLocalFolderNameState(handle.name);
@@ -360,7 +365,11 @@ export default function VideoEditorPage() {
       if (type === "description") setGeneratedDescription(generated);
       if (type === "tags" && Array.isArray(data.tags)) setGeneratedTags(data.tags);
       if (data.script) {
-        const newScript = data.script as Script;
+        if (!data.script || typeof data.script !== "object" || !("id" in data.script)) {
+        setError("Respuesta inválida del servidor");
+        return;
+      }
+      const newScript = data.script as Script;
         setVideo((prev) =>
           prev ? { ...prev, scripts: [newScript, ...prev.scripts] } : null
         );
@@ -454,7 +463,11 @@ export default function VideoEditorPage() {
       };
       if (!win.__scriptingToolDirHandle) {
         try {
-          const handle = await win.showDirectoryPicker!();
+          if (!win.showDirectoryPicker) {
+            setSceneImageError("Tu navegador no soporta selección de carpetas. Usa Chrome o Edge.");
+            return;
+          }
+          const handle = await win.showDirectoryPicker();
           win.__scriptingToolDirHandle = handle;
           setLocalFolderName(handle.name);
           setLocalFolderNameState(handle.name);
@@ -487,6 +500,10 @@ export default function VideoEditorPage() {
       const data = await res.json();
       if (!res.ok) {
         setSceneImageError(data.error || "Error al generar imagen de la escena");
+        return;
+      }
+      if (!data.thumbnail?.id || !data.thumbnail?.blobUrl) {
+        setSceneImageError("Respuesta inválida del servidor");
         return;
       }
       const thumb = data.thumbnail as { id: string; blobUrl: string; fragmentIndex: number };
@@ -989,7 +1006,7 @@ export default function VideoEditorPage() {
                     <button
                       key={i}
                       type="button"
-                      onClick={() => void navigator.clipboard.writeText(tag)}
+                      onClick={() => navigator.clipboard.writeText(tag).catch(() => {})}
                       className="rounded-md border border-[rgb(var(--border))] bg-[rgb(var(--bg-surface))] px-2.5 py-1 text-sm text-[rgb(var(--text-primary))] hover:bg-[rgb(var(--accent-soft))] hover:border-[rgb(var(--accent))]"
                     >
                       {tag}
@@ -998,7 +1015,7 @@ export default function VideoEditorPage() {
                 </div>
                 <button
                   type="button"
-                  onClick={() => void navigator.clipboard.writeText(generatedTags.join(", "))}
+                  onClick={() => navigator.clipboard.writeText(generatedTags.join(", ")).catch(() => {})}
                   className="mt-3 text-xs text-[rgb(var(--accent))] hover:underline"
                 >
                   Copiar todas
