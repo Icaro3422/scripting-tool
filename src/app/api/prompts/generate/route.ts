@@ -102,7 +102,7 @@ async function requestGroqBatch(
 ): Promise<PromptResult[]> {
   const completion = await groq.chat.completions.create({
     model,
-    temperature: 1,
+    temperature: 0.5,
     messages: [
       {
         role: "system",
@@ -137,7 +137,7 @@ async function requestOpenRouterBatch(
     },
     body: JSON.stringify({
       model: openRouterModel,
-      temperature: 1,
+      temperature: 0.5,
       messages: [
         {
           role: "system",
