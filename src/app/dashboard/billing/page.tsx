@@ -1,119 +1,19 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 import { Wallet, History, Loader2, BarChart3 } from "lucide-react";
-
-const usdFmt = new Intl.NumberFormat("es", {
-  style: "currency",
-  currency: "USD",
-  minimumFractionDigits: 2,
-  maximumFractionDigits: 4,
-});
-
-function formatUsdFromInternalCents(cents: number): string {
-  return usdFmt.format(cents / 100);
-}
-
-const OPERATION_LABELS: Record<string, string> = {
-  script: "Guion / Título / Descripción / Tags",
-  thumbnail: "Miniatura",
-  "scene-image": "Imagen de escena",
-  "channel-analyze": "Análisis de canal",
-};
-
-type UsageByModelRow = {
-  model: string;
-  operations: number;
-  costCents: number;
-  inputTokens: number;
-  outputTokens: number;
-};
-
-type OpenRouterActivityState =
-  | { loading: true }
-  | {
-    loading: false;
-    configured: false;
-    message?: string;
-  }
-  | {
-    loading: false;
-    configured: true;
-    ok: boolean;
-    status: number;
-    date?: string;
-    data: unknown;
-  };
-
-function extractActivityRows(payload: unknown): Record<string, unknown>[] | null {
-  if (!payload || typeof payload !== "object") return null;
-  const o = payload as Record<string, unknown>;
-  if (Array.isArray(o.data)) return o.data as Record<string, unknown>[];
-  if (Array.isArray(o)) return o as Record<string, unknown>[];
-  return null;
-}
+import { useBillingSummary, useOpenRouterActivity } from "@/hooks/use-billing";
+import {
+  OPERATION_LABELS,
+  formatUsdFromInternalCents,
+  extractActivityRows,
+  formatCellValue,
+} from "@/lib/billing-ui";
 
 export default function BillingPage() {
-  const [summary, setSummary] = useState<{
-    balanceCents: number;
-    totalSpentCents: number;
-    totalOperations: number;
-    usageByModel?: UsageByModelRow[];
-    recentUsage: Array<{
-      id: string;
-      operationType: string;
-      provider: string;
-      model: string | null;
-      costCents: number;
-      createdAt: string;
-    }>;
-  } | null>(null);
-  const [loading, setLoading] = useState(true);
+  const { summary, loading } = useBillingSummary();
+  const { state: orActivity, fetchActivity } = useOpenRouterActivity();
   const [activityDate, setActivityDate] = useState("");
-  const [orActivity, setOrActivity] = useState<OpenRouterActivityState>({ loading: true });
-
-  const loadOpenRouterActivity = useCallback(() => {
-    setOrActivity({ loading: true });
-    const q = activityDate.trim() ? `?date=${encodeURIComponent(activityDate.trim())}` : "";
-    fetch(`/api/billing/openrouter-activity${q}`)
-      .then((r) => r.json())
-      .then((data) => {
-        if (data.configured === false) {
-          setOrActivity({
-            loading: false,
-            configured: false,
-            message: data.message,
-          });
-          return;
-        }
-        setOrActivity({
-          loading: false,
-          configured: true,
-          ok: data.ok === true,
-          status: data.status ?? 0,
-          date: data.date,
-          data: data.data,
-        });
-      })
-      .catch(() =>
-        setOrActivity({
-          loading: false,
-          configured: true,
-          ok: false,
-          status: 0,
-          data: { error: "No se pudo cargar" },
-        })
-      );
-  }, [activityDate]);
-
-  useEffect(() => {
-    fetch("/api/billing/summary")
-      .then((r) => r.json())
-      .then((data) => {
-        if (data.balanceCents !== undefined) setSummary(data);
-      })
-      .finally(() => setLoading(false));
-  }, []);
 
   if (loading) {
     return (
@@ -238,8 +138,8 @@ export default function BillingPage() {
               </div>
               <button
                 type="button"
-                onClick={loadOpenRouterActivity}
-                className="rounded-lg bg-[rgb(var(--accent))] px-4 py-2 text-sm font-medium text-white hover:opacity-90"
+                onClick={() => fetchActivity(activityDate)}
+                className="rounded-lg bg-[rgb(var(--accent))] px-4 py-2 text-sm font-medium text-white shadow-sm hover:opacity-90 active:scale-95 transition-all"
               >
                 Consultar
               </button>
@@ -344,8 +244,4 @@ export default function BillingPage() {
   );
 }
 
-function formatCellValue(v: unknown): string {
-  if (v == null) return "";
-  if (typeof v === "object") return JSON.stringify(v);
-  return String(v);
-}
+
