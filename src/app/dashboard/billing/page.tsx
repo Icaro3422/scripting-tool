@@ -32,18 +32,18 @@ type UsageByModelRow = {
 type OpenRouterActivityState =
   | { loading: true }
   | {
-      loading: false;
-      configured: false;
-      message?: string;
-    }
+    loading: false;
+    configured: false;
+    message?: string;
+  }
   | {
-      loading: false;
-      configured: true;
-      ok: boolean;
-      status: number;
-      date?: string;
-      data: unknown;
-    };
+    loading: false;
+    configured: true;
+    ok: boolean;
+    status: number;
+    date?: string;
+    data: unknown;
+  };
 
 function extractActivityRows(payload: unknown): Record<string, unknown>[] | null {
   if (!payload || typeof payload !== "object") return null;
@@ -114,10 +114,6 @@ export default function BillingPage() {
       })
       .finally(() => setLoading(false));
   }, []);
-
-  useEffect(() => {
-    loadOpenRouterActivity();
-  }, [loadOpenRouterActivity]);
 
   if (loading) {
     return (
