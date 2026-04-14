@@ -1,7 +1,7 @@
 "use client";
 
 import { useParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import Link from "next/link";
 import {
   FileText,
@@ -15,15 +15,13 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AI_MODELS, SCRIPT_RECOMMENDED_IDS, THUMBNAIL_IMAGE_MODELS } from "@/types/ai";
-import {
-  DURATION_PRESETS,
-  FRAGMENT_MAX_WORDS,
-  countWords,
-  estimatedMinutes,
-  type FragmentSplitMode,
-} from "@/lib/scriptUtils";
+import { DURATION_PRESETS, FRAGMENT_MAX_WORDS, type FragmentSplitMode } from "@/lib/scriptUtils";
+import { countWords, estimatedMinutes, type SplitConfigState, type PromptResult } from "@/lib/text-processing";
 import { ScriptFragmentsTable } from "@/components/ScriptFragmentsTable";
 import { ScriptTimeline } from "@/components/ScriptTimeline";
+import { ScriptSplitConfig } from "@/components/ScriptSplitConfig";
+import { ImageStyleSelector } from "@/components/ImageStyleSelector";
+import { ExportMenu } from "@/components/ExportMenu";
 import {
   getStorageMode,
   setLocalThumbPath,
@@ -74,9 +72,10 @@ interface Preset {
 }
 
 export default function VideoEditorPage() {
-  const params = useParams();
-  const projectId = params.id as string;
-  const videoId = params.videoId as string;
+  const params = useParams<{ id: string; videoId: string }>();
+  const projectId = params?.id;
+  const videoId = params?.videoId;
+
   const [video, setVideo] = useState<Video | null>(null);
   const [presets, setPresets] = useState<Preset[]>([]);
   const [aiModels, setAiModels] = useState<AIModelItem[]>([]);
@@ -113,6 +112,23 @@ export default function VideoEditorPage() {
   const [storageMode, setStorageModeState] = useState<"cloud" | "local">("cloud");
   const [localFolderName, setLocalFolderNameState] = useState<string | null>(null);
 
+  // Dynamic split method state (Iteration 1)
+  const [splitConfig, setSplitConfig] = useState<SplitConfigState>({
+    method: "strict",
+    targetChunks: 10,
+    strictMinWords: 15,
+    strictMaxWords: 21,
+  });
+
+  // Derived value for components that need just the method
+  const splitMethod = splitConfig.method;
+
+  // Image prompt generation state (Iteration 2)
+  const [imageStyle, setImageStyle] = useState("");
+  const [generatedPrompts, setGeneratedPrompts] = useState<PromptResult[]>([]);
+  const [promptsLoading, setPromptsLoading] = useState(false);
+  const [promptsError, setPromptsError] = useState<string | null>(null);
+
   useEffect(() => {
     setStorageModeState(getStorageMode());
     setLocalFolderNameState(getLocalFolderName());
@@ -124,38 +140,39 @@ export default function VideoEditorPage() {
       fetch(`/api/projects/${projectId}/videos/${videoId}`).then((r) => r.json()),
       fetch("/api/presets").then((r) => r.json()),
       fetch("/api/ai/models").then((r) => r.json()),
-    ]).then(([videoData, presetsData, modelsData]) => {
-      if (videoData.video) setVideo(videoData.video);
-      if (presetsData.presets) setPresets(presetsData.presets);
-      if (modelsData.models?.length) {
-        setAiModels(modelsData.models);
-        const list = modelsData.models as AIModelItem[];
-        const preferred =
-          list.find((m: AIModelItem) => m.costTier === "free") ??
-          list.find((m: AIModelItem) => SCRIPT_RECOMMENDED_IDS.has(m.openRouterId || m.id)) ??
-          list[0];
-        if (
-          list.length &&
-          (!modelId || !list.some((m: AIModelItem) => (m.openRouterId || m.id) === modelId))
-        ) {
-          setModelId(preferred?.openRouterId || preferred?.id || list[0].openRouterId || list[0].id);
-        } else if (!modelId && preferred) {
-          setModelId(preferred.openRouterId || preferred.id);
-        } else if (!modelId && list[0]) {
-          setModelId(list[0].openRouterId || list[0].id);
+    ])
+      .then(([videoData, presetsData, modelsData]) => {
+        if (videoData.video) setVideo(videoData.video);
+        if (presetsData.presets) setPresets(presetsData.presets);
+        if (modelsData.models?.length) {
+          setAiModels(modelsData.models);
+          const list = modelsData.models as AIModelItem[];
+          const preferred =
+            list.find((m: AIModelItem) => m.costTier === "free") ??
+            list.find((m: AIModelItem) => SCRIPT_RECOMMENDED_IDS.has(m.openRouterId || m.id)) ??
+            list[0];
+          if (
+            list.length &&
+            (!modelId || !list.some((m: AIModelItem) => (m.openRouterId || m.id) === modelId))
+          ) {
+            setModelId(preferred?.openRouterId || preferred?.id || list[0].openRouterId || list[0].id);
+          } else if (!modelId && preferred) {
+            setModelId(preferred.openRouterId || preferred.id);
+          } else if (!modelId && list[0]) {
+            setModelId(list[0].openRouterId || list[0].id);
+          }
+        } else {
+          setAiModels(
+            AI_MODELS.map((m) => ({
+              id: m.id,
+              name: m.name,
+              provider: m.provider,
+              costTier: m.costTier,
+              openRouterId: null,
+            }))
+          );
         }
-      } else {
-        setAiModels(
-          AI_MODELS.map((m) => ({
-            id: m.id,
-            name: m.name,
-            provider: m.provider,
-            costTier: m.costTier,
-            openRouterId: null,
-          }))
-        );
-      }
-    });
+      });
   }, [projectId, videoId]);
 
   useEffect(() => {
@@ -186,7 +203,11 @@ export default function VideoEditorPage() {
       };
       if (!win.__scriptingToolDirHandle) {
         try {
-          const handle = await win.showDirectoryPicker!();
+          if (!win.showDirectoryPicker) {
+            setThumbError("Tu navegador no soporta selección de carpetas. Usa Chrome o Edge.");
+            return;
+          }
+          const handle = await win.showDirectoryPicker();
           win.__scriptingToolDirHandle = handle;
           setLocalFolderName(handle.name);
           setLocalFolderNameState(handle.name);
@@ -259,9 +280,9 @@ export default function VideoEditorPage() {
       setVideo((prev) =>
         prev && thumbnail
           ? {
-              ...prev,
-              thumbnails: [{ ...thumbnail, blobUrl: thumbnail.blobUrl }, ...prev.thumbnails],
-            }
+            ...prev,
+            thumbnails: [{ ...thumbnail, blobUrl: thumbnail.blobUrl }, ...prev.thumbnails],
+          }
           : prev
       );
       setThumbError(localSaveError ?? null);
@@ -345,7 +366,7 @@ export default function VideoEditorPage() {
       if (type === "title") setGeneratedTitle(generated);
       if (type === "description") setGeneratedDescription(generated);
       if (type === "tags" && Array.isArray(data.tags)) setGeneratedTags(data.tags);
-      if (data.script) {
+      if (data.script && typeof data.script === "object" && "id" in data.script) {
         const newScript = data.script as Script;
         setVideo((prev) =>
           prev ? { ...prev, scripts: [newScript, ...prev.scripts] } : null
@@ -355,10 +376,10 @@ export default function VideoEditorPage() {
         setVideo((prev) =>
           prev
             ? {
-                ...prev,
-                ...(type === "title" && { title: data.generated as string }),
-                ...(type === "description" && { description: data.generated as string }),
-              }
+              ...prev,
+              ...(type === "title" && { title: data.generated as string }),
+              ...(type === "description" && { description: data.generated as string }),
+            }
             : null
         );
       }
@@ -369,6 +390,63 @@ export default function VideoEditorPage() {
       setError(e instanceof Error ? e.message : "Error");
     } finally {
       setLoading(false);
+    }
+  }
+
+  const handlePromptChange = useCallback((fragmentId: number, newPrompt: string) => {
+    setGeneratedPrompts((prev) =>
+      prev.map((p) =>
+        p.fragment_id === fragmentId ? { ...p, image_prompt: newPrompt } : p
+      )
+    );
+  }, []);
+
+  async function handleGeneratePrompts() {
+    if (!scriptContentForFragments.trim()) {
+      setPromptsError("Genera un script primero.");
+      return;
+    }
+    if (!imageStyle.trim()) {
+      setPromptsError("Selecciona un estilo de imagen.");
+      return;
+    }
+    setPromptsLoading(true);
+    setPromptsError(null);
+    try {
+      // Split the script to get fragments with IDs
+      const { splitByMethod } = await import("@/lib/text-processing");
+      const method = splitConfig.method;
+      const fragments = splitByMethod(scriptContentForFragments, method, {
+        minWords: splitConfig.strictMinWords,
+        maxWords: splitConfig.strictMaxWords,
+        targetChunks: splitConfig.targetChunks,
+      });
+
+      const res = await fetch("/api/prompts/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fragments: fragments.map((f) => ({ id: f.id, text: f.text })),
+          style: imageStyle,
+        }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        const errorMsg = data && typeof data === "object" && typeof data.error === "string"
+          ? data.error
+          : "Error al generar prompts";
+        setPromptsError(errorMsg);
+        return;
+      }
+      if (!data || typeof data !== "object" || !Array.isArray(data.results)) {
+        setPromptsError("Respuesta inválida");
+        return;
+      }
+      setGeneratedPrompts(data.results as PromptResult[]);
+    } catch (e) {
+      setPromptsError(e instanceof Error ? e.message : "Error");
+    } finally {
+      setPromptsLoading(false);
     }
   }
 
@@ -383,7 +461,11 @@ export default function VideoEditorPage() {
       };
       if (!win.__scriptingToolDirHandle) {
         try {
-          const handle = await win.showDirectoryPicker!();
+          if (!win.showDirectoryPicker) {
+            setSceneImageError("Tu navegador no soporta selección de carpetas. Usa Chrome o Edge.");
+            return;
+          }
+          const handle = await win.showDirectoryPicker();
           win.__scriptingToolDirHandle = handle;
           setLocalFolderName(handle.name);
           setLocalFolderNameState(handle.name);
@@ -418,6 +500,10 @@ export default function VideoEditorPage() {
         setSceneImageError(data.error || "Error al generar imagen de la escena");
         return;
       }
+      if (!data.thumbnail?.id || !data.thumbnail?.blobUrl) {
+        setSceneImageError("Respuesta inválida del servidor");
+        return;
+      }
       const thumb = data.thumbnail as { id: string; blobUrl: string; fragmentIndex: number };
       if (data.imageBase64 && storageModeForScene === "local") {
         await setLocalThumbData(thumb.id, data.imageBase64);
@@ -445,12 +531,12 @@ export default function VideoEditorPage() {
       setVideo((prev) =>
         prev
           ? {
-              ...prev,
-              thumbnails: [
-                { ...thumb, blobUrl: thumb.blobUrl, fragmentIndex: thumb.fragmentIndex },
-                ...prev.thumbnails,
-              ],
-            }
+            ...prev,
+            thumbnails: [
+              { ...thumb, blobUrl: thumb.blobUrl, fragmentIndex: thumb.fragmentIndex },
+              ...prev.thumbnails,
+            ],
+          }
           : prev
       );
     } catch (e) {
@@ -459,6 +545,46 @@ export default function VideoEditorPage() {
       setSceneImageLoading(null);
     }
   }
+
+
+  const tabs: { id: TabId; label: string; icon: React.ReactNode }[] = [
+    { id: "script", label: "Script", icon: <FileText className="h-4 w-4" /> },
+    { id: "title", label: "Título", icon: <Type className="h-4 w-4" /> },
+    { id: "description", label: "Descripción", icon: <AlignLeft className="h-4 w-4" /> },
+    { id: "tags", label: "Etiquetas SEO", icon: <Tag className="h-4 w-4" /> },
+    { id: "thumbnail", label: "Miniatura", icon: <ImageIcon className="h-4 w-4" /> },
+  ];
+
+  const latestScript = video?.scripts?.[0];
+  const scriptContentForFragments = useMemo(
+    () => (generatedScript ?? latestScript?.content ?? "").trim(),
+    [generatedScript, latestScript?.content]
+  );
+  const allScriptModels = aiModels.length
+    ? aiModels
+    : AI_MODELS.map((m) => ({
+      id: m.id,
+      name: m.name,
+      provider: m.provider,
+      costTier: m.costTier,
+      openRouterId: null as string | null,
+    }));
+  const modelsForScriptDropdown = [...allScriptModels].sort((a, b) => {
+    const aRec = SCRIPT_RECOMMENDED_IDS.has(a.openRouterId || a.id) ? 1 : 0;
+    const bRec = SCRIPT_RECOMMENDED_IDS.has(b.openRouterId || b.id) ? 1 : 0;
+    if (bRec !== aRec) return bRec - aRec;
+    if (a.costTier === "free" && b.costTier !== "free") return -1;
+    if (b.costTier === "free" && a.costTier !== "free") return 1;
+    return (a.name ?? a.id).localeCompare(b.name ?? b.id);
+  });
+
+  const sceneImages = useMemo(() => {
+    const map: Record<number, { id: string; blobUrl: string }> = {};
+    (video?.thumbnails ?? []).forEach((t) => {
+      if (t.fragmentIndex != null) map[t.fragmentIndex] = { id: t.id, blobUrl: t.blobUrl };
+    });
+    return map;
+  }, [video?.thumbnails]);
 
   if (!video) {
     return (
@@ -469,42 +595,14 @@ export default function VideoEditorPage() {
     );
   }
 
-  const tabs: { id: TabId; label: string; icon: React.ReactNode }[] = [
-    { id: "script", label: "Script", icon: <FileText className="h-4 w-4" /> },
-    { id: "title", label: "Título", icon: <Type className="h-4 w-4" /> },
-    { id: "description", label: "Descripción", icon: <AlignLeft className="h-4 w-4" /> },
-    { id: "tags", label: "Etiquetas SEO", icon: <Tag className="h-4 w-4" /> },
-    { id: "thumbnail", label: "Miniatura", icon: <ImageIcon className="h-4 w-4" /> },
-  ];
-
-  const latestScript = video.scripts[0];
-  const scriptContentForFragments = (
-    generatedScript ??
-    latestScript?.content ??
-    ""
-  ).trim();
-  const allScriptModels = aiModels.length
-    ? aiModels
-    : AI_MODELS.map((m) => ({
-        id: m.id,
-        name: m.name,
-        provider: m.provider,
-        costTier: m.costTier,
-        openRouterId: null as string | null,
-      }));
-  const modelsForScriptDropdown = [...allScriptModels].sort((a, b) => {
-    const aRec = SCRIPT_RECOMMENDED_IDS.has(a.openRouterId || a.id) ? 1 : 0;
-    const bRec = SCRIPT_RECOMMENDED_IDS.has(b.openRouterId || b.id) ? 1 : 0;
-    if (bRec !== aRec) return bRec - aRec;
-    if (a.costTier === "free" && b.costTier !== "free") return -1;
-    if (b.costTier === "free" && a.costTier !== "free") return 1;
-    return (a.name ?? a.id).localeCompare(b.name ?? b.id);
-  });
-
-  const sceneImages: Record<number, { id: string; blobUrl: string }> = {};
-  video.thumbnails.forEach((t) => {
-    if (t.fragmentIndex != null) sceneImages[t.fragmentIndex] = { id: t.id, blobUrl: t.blobUrl };
-  });
+  // Guard against missing params (must be after all hooks)
+  if (!projectId || !videoId) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <p className="text-[rgb(var(--text-muted))]">Video no encontrado</p>
+      </div>
+    );
+  }
 
   return (
     <div className="p-8 max-w-4xl">
@@ -753,8 +851,46 @@ export default function VideoEditorPage() {
                       onGenerateScene={handleGenerateScene}
                       sceneImages={sceneImages}
                       sceneLoadingIndex={sceneImageLoading}
+                      splitMethod={splitMethod}
+                      splitConfig={splitConfig}
                     />
                   </div>
+                  <ScriptSplitConfig
+                    scriptContent={scriptContentForFragments}
+                    initialMethod={splitMethod}
+                    initialConfig={splitConfig}
+                    onMethodChange={(_method, config) => {
+                      setSplitConfig(config);
+                    }}
+                  />
+
+                  {/* Image prompt generation */}
+                  <div className="rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--bg-surface))] p-4 space-y-4">
+                    <h3 className="text-sm font-medium text-[rgb(var(--text-primary))]">
+                      Generar prompts de imagen
+                    </h3>
+                    <ImageStyleSelector
+                      value={imageStyle}
+                      onChange={setImageStyle}
+                    />
+                    {promptsError && (
+                      <p className="text-sm text-red-600 dark:text-red-400">{promptsError}</p>
+                    )}
+                    <button
+                      type="button"
+                      onClick={handleGeneratePrompts}
+                      disabled={promptsLoading || !scriptContentForFragments.trim()}
+                      className="rounded-lg bg-[rgb(var(--accent))] px-4 py-2.5 text-white font-medium hover:opacity-90 disabled:opacity-50 flex items-center gap-2"
+                    >
+                      {promptsLoading ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Sparkles className="h-4 w-4" />
+                      )}
+                      Generar prompts
+                    </button>
+                  </div>
+
                   <h3 className="text-sm font-medium text-[rgb(var(--text-primary))] mb-2">
                     Tabla de fragmentos (copiar bloques)
                   </h3>
@@ -767,8 +903,22 @@ export default function VideoEditorPage() {
                       onGenerateScene={handleGenerateScene}
                       sceneImages={sceneImages}
                       sceneLoadingIndex={sceneImageLoading}
+                      splitMethod={splitMethod}
+                      splitConfig={splitConfig}
+                      prompts={generatedPrompts}
+                      onPromptChange={handlePromptChange}
                     />
                   </div>
+
+                  {/* Export menu for generated prompts */}
+                  {generatedPrompts.length > 0 && (
+                    <div className="flex items-center justify-between mt-4 pt-4 border-t border-[rgb(var(--border))]">
+                      <p className="text-sm text-[rgb(var(--text-secondary))]">
+                        {generatedPrompts.length} prompts generados
+                      </p>
+                      <ExportMenu prompts={generatedPrompts} />
+                    </div>
+                  )}
                 </>
               ) : (
                 <p className="text-[rgb(var(--text-muted))]">
@@ -885,7 +1035,7 @@ export default function VideoEditorPage() {
                     <button
                       key={i}
                       type="button"
-                      onClick={() => void navigator.clipboard.writeText(tag)}
+                      onClick={() => navigator.clipboard.writeText(tag).catch(() => { })}
                       className="rounded-md border border-[rgb(var(--border))] bg-[rgb(var(--bg-surface))] px-2.5 py-1 text-sm text-[rgb(var(--text-primary))] hover:bg-[rgb(var(--accent-soft))] hover:border-[rgb(var(--accent))]"
                     >
                       {tag}
@@ -894,7 +1044,7 @@ export default function VideoEditorPage() {
                 </div>
                 <button
                   type="button"
-                  onClick={() => void navigator.clipboard.writeText(generatedTags.join(", "))}
+                  onClick={() => navigator.clipboard.writeText(generatedTags.join(", ")).catch(() => { })}
                   className="mt-3 text-xs text-[rgb(var(--accent))] hover:underline"
                 >
                   Copiar todas

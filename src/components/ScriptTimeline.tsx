@@ -1,8 +1,8 @@
 "use client";
 
-import { useRef, useState } from "react";
-import { fragmentarScript, type FragmentSplitMode } from "@/lib/scriptUtils";
-import { WORDS_PER_MINUTE } from "@/lib/scriptUtils";
+import { useRef, useState, useMemo } from "react";
+import { splitByMethod, WORDS_PER_MINUTE, type SplitMethod, type SplitConfigState } from "@/lib/text-processing";
+import { type FragmentSplitMode } from "@/lib/scriptUtils";
 import { ImageIcon, Loader2, Mic, GripVertical } from "lucide-react";
 import { LocalThumbnailImage } from "@/components/LocalThumbnailImage";
 import { LOCAL_URL_PREFIX } from "@/lib/client-storage";
@@ -36,6 +36,9 @@ interface ScriptTimelineProps {
   sceneLoadingAll?: boolean;
   referenceImagePreview?: string | null;
   onReferenceImageChange?: (base64: string | null) => void;
+  // Dynamic split method props
+  splitMethod?: SplitMethod;
+  splitConfig?: SplitConfigState;
 }
 
 export function ScriptTimeline({
@@ -50,10 +53,22 @@ export function ScriptTimeline({
   sceneLoadingAll = false,
   referenceImagePreview = null,
   onReferenceImageChange,
+  splitMethod = "strict",
+  splitConfig,
 }: ScriptTimelineProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [selectedSceneIndex, setSelectedSceneIndex] = useState<number | null>(null);
-  const fragmentos = fragmentarScript(scriptContent, fragmentSplitMode);
+
+  // Determine split method
+  const fragmentos = useMemo(() => {
+    const method = splitConfig?.method ?? splitMethod;
+    const fragments = splitByMethod(scriptContent, method, {
+      minWords: splitConfig?.strictMinWords,
+      maxWords: splitConfig?.strictMaxWords,
+      targetChunks: splitConfig?.targetChunks,
+    });
+    return fragments.map(f => f.text);
+  }, [scriptContent, splitMethod, splitConfig]);
 
   if (fragmentos.length === 0) return null;
 

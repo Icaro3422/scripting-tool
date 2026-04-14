@@ -39,3 +39,5 @@ prisma/migrations/*_migration_lock.toml
 
 # clerk configuration (can include secrets)
 /.clerk/
+
+tsconfig.tsbuildinfo
