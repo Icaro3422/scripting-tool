@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { auth } from "@clerk/nextjs/server";
 import { InferenceClient } from "@huggingface/inference";
 import { getVoiceById } from "@/lib/voices/voiceCatalog";
 
@@ -26,6 +27,9 @@ const DEFAULT_SAMPLE = "This is a voice preview.";
  * Necesita HUGGINGFACE_API_KEY en .env.
  */
 export async function POST(req: NextRequest) {
+  const { userId } = await auth();
+  if (!userId) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
+
   const key = process.env.HUGGINGFACE_API_KEY;
   if (!key) {
     return NextResponse.json(

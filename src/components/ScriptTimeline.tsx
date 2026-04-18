@@ -2,6 +2,7 @@
 
 import { useRef, useState, useMemo } from "react";
 import { splitByMethod, WORDS_PER_MINUTE, type SplitMethod, type SplitConfigState } from "@/lib/text-processing";
+import { type FragmentSplitMode } from "@/lib/scriptUtils";
 import { ImageIcon, Loader2, Mic, GripVertical } from "lucide-react";
 import { LocalThumbnailImage } from "@/components/LocalThumbnailImage";
 import { LOCAL_URL_PREFIX } from "@/lib/client-storage";
@@ -25,6 +26,7 @@ const SCENE_IMAGE_MODELS: SceneImageModel[] = [
 
 interface ScriptTimelineProps {
   scriptContent: string;
+  fragmentSplitMode: FragmentSplitMode;
   sceneImageModelId: string;
   onSceneImageModelChange: (id: string) => void;
   onGenerateScene?: (fragmentIndex: number, text: string) => void;
@@ -41,6 +43,7 @@ interface ScriptTimelineProps {
 
 export function ScriptTimeline({
   scriptContent,
+  fragmentSplitMode,
   sceneImageModelId,
   onSceneImageModelChange,
   onGenerateScene,

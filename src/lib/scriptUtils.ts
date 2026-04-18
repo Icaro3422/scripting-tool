@@ -1,6 +1,12 @@
 /** Palabras por minuto al narrar en español (referencia para duración del video) */
 export const WORDS_PER_MINUTE = 150;
 
+/** Modo de división del guion en escenas/fragmentos */
+export type FragmentSplitMode = "range" | "punctuation";
+
+export const FRAGMENT_MIN_WORDS = 15;
+export const FRAGMENT_MAX_WORDS = 21;
+
 export const DURATION_PRESETS = [
   { id: "1", label: "Short (≈1 min)", minutes: 1 },
   { id: "3", label: "≈3 min", minutes: 3 },
@@ -83,4 +89,40 @@ export function fragmentarEstricto(
   }
 
   return fragmentos;
+}
+
+/**
+ * Trozos de como máximo `maxP` palabras (el último puede ser más corto).
+ * Sin buscar puntuación: cortes fijos por ventana de palabras.
+ */
+export function fragmentarPorRangoEstricto(texto: string, maxP: number = FRAGMENT_MAX_WORDS): string[] {
+  const normalized = texto.replace(/\s+/g, " ").trim();
+  if (!normalized) return [];
+  const palabras = normalized.split(" ").filter(Boolean);
+  const fragmentos: string[] = [];
+  let inicio = 0;
+  while (inicio < palabras.length) {
+    const segmento = palabras.slice(inicio, inicio + maxP);
+    fragmentos.push(segmento.join(" "));
+    inicio += segmento.length;
+  }
+  return fragmentos;
+}
+
+/**
+ * Parte por frases/oraciones: delimitadores . ! ? ; : seguidos de espacio.
+ */
+export function fragmentarPorPuntuacion(texto: string): string[] {
+  const normalized = texto.replace(/\s+/g, " ").trim();
+  if (!normalized) return [];
+  const parts = normalized
+    .split(/(?<=[.!?;:])\s+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return parts.length > 0 ? parts : [normalized];
+}
+
+export function fragmentarScript(texto: string, mode: FragmentSplitMode): string[] {
+  if (mode === "punctuation") return fragmentarPorPuntuacion(texto);
+  return fragmentarPorRangoEstricto(texto, FRAGMENT_MAX_WORDS);
 }

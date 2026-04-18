@@ -130,6 +130,7 @@ export async function POST(req: NextRequest) {
       model: modelForApi,
       inputTokens,
       outputTokens,
+      actualCostUsd: provider === "openrouter" ? usage?.cost_usd : undefined,
       metadata: { type },
     });
 

@@ -18,20 +18,43 @@ export function estimateCostCents(inputTokens: number, outputTokens: number): nu
 }
 
 /**
- * Registra uso de IA y, si BILLING_ENABLED, descuenta del balance.
- * Si billing desactivado, solo registra (sin descontar).
- * Lanza si hay billing y balance insuficiente.
+ * Si OpenRouter devuelve `usage.cost` (USD), convierte a centavos de USD (entero).
+ * Si no hay coste reportado o es 0, usa la estimación por tokens.
  */
-export async function recordUsageAndDeduct(params: {
+export function resolveCostCents(
+  inputTokens: number,
+  outputTokens: number,
+  actualCostUsd?: number
+): number {
+  if (actualCostUsd != null && Number.isFinite(actualCostUsd) && actualCostUsd > 0) {
+    return Math.max(1, Math.round(actualCostUsd * 100));
+  }
+  return estimateCostCents(inputTokens, outputTokens);
+}
+
+type RecordUsageParams = {
   userId: string;
   operationType: OperationType;
   provider: string;
   model?: string;
   inputTokens: number;
   outputTokens: number;
+  /** USD reportado por OpenRouter en `usage.cost` cuando aplica */
+  actualCostUsd?: number;
   metadata?: Record<string, unknown>;
-}): Promise<{ costCents: number }> {
-  const costCents = estimateCostCents(params.inputTokens, params.outputTokens);
+};
+
+/**
+ * Registra uso de IA y, si BILLING_ENABLED, descuenta del balance.
+ * Si billing desactivado, solo registra (sin descontar).
+ * Lanza si hay billing y balance insuficiente.
+ */
+export async function recordUsageAndDeduct(params: RecordUsageParams): Promise<{ costCents: number }> {
+  const costCents = resolveCostCents(
+    params.inputTokens,
+    params.outputTokens,
+    params.actualCostUsd
+  );
 
   if (BILLING_ENABLED) {
     const user = await prisma.user.findUnique({
@@ -43,7 +66,7 @@ export async function recordUsageAndDeduct(params: {
     const newBalance = user.balanceCents - costCents;
     if (newBalance < 0) {
       throw new Error(
-        `Saldo insuficiente. Necesitas ${(costCents / 100).toFixed(2)} €. Tu balance: ${(user.balanceCents / 100).toFixed(2)} €. Recarga en Facturación.`
+        `Saldo insuficiente. Necesitas ${(costCents / 100).toFixed(2)} (unidades de balance). Tu balance: ${(user.balanceCents / 100).toFixed(2)}. Recarga en Facturación.`
       );
     }
 
@@ -76,16 +99,12 @@ export async function recordUsageAndDeduct(params: {
  * Registra uso sin descontar (para modo demo o cuando el balance no aplica).
  * Útil para tracking aunque no se cobre.
  */
-export async function recordUsageOnly(params: {
-  userId: string;
-  operationType: OperationType;
-  provider: string;
-  model?: string;
-  inputTokens: number;
-  outputTokens: number;
-  metadata?: Record<string, unknown>;
-}): Promise<void> {
-  const costCents = estimateCostCents(params.inputTokens, params.outputTokens);
+export async function recordUsageOnly(params: RecordUsageParams): Promise<void> {
+  const costCents = resolveCostCents(
+    params.inputTokens,
+    params.outputTokens,
+    params.actualCostUsd
+  );
   await prisma.usageRecord.create({
     data: {
       userId: params.userId,
@@ -102,7 +121,7 @@ export async function recordUsageOnly(params: {
 
 /** Obtiene el balance y resumen de uso del usuario */
 export async function getBillingSummary(userId: string) {
-  const [user, usageStats, recentUsage] = await Promise.all([
+  const [user, usageStats, recentUsage, usageByModel] = await Promise.all([
     prisma.user.findUnique({
       where: { id: userId },
       select: { balanceCents: true },
@@ -117,6 +136,12 @@ export async function getBillingSummary(userId: string) {
       orderBy: { createdAt: "desc" },
       take: 50,
     }),
+    prisma.usageRecord.groupBy({
+      by: ["model"],
+      where: { userId, model: { not: null } },
+      _sum: { costCents: true, inputTokens: true, outputTokens: true },
+      _count: true,
+    }),
   ]);
 
   return {
@@ -124,5 +149,12 @@ export async function getBillingSummary(userId: string) {
     totalSpentCents: usageStats._sum.costCents ?? 0,
     totalOperations: usageStats._count,
     recentUsage,
+    usageByModel: usageByModel.map((row) => ({
+      model: row.model as string,
+      operations: row._count,
+      costCents: row._sum.costCents ?? 0,
+      inputTokens: row._sum.inputTokens ?? 0,
+      outputTokens: row._sum.outputTokens ?? 0,
+    })),
   };
 }

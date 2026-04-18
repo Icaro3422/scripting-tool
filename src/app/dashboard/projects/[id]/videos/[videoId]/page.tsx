@@ -15,7 +15,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AI_MODELS, SCRIPT_RECOMMENDED_IDS, THUMBNAIL_IMAGE_MODELS } from "@/types/ai";
-import { DURATION_PRESETS } from "@/lib/scriptUtils";
+import { DURATION_PRESETS, FRAGMENT_MAX_WORDS, type FragmentSplitMode } from "@/lib/scriptUtils";
 import { countWords, estimatedMinutes, type SplitConfigState, type PromptResult } from "@/lib/text-processing";
 import { ScriptFragmentsTable } from "@/components/ScriptFragmentsTable";
 import { ScriptTimeline } from "@/components/ScriptTimeline";
@@ -106,11 +106,12 @@ export default function VideoEditorPage() {
   );
   const [thumbWordStyle, setThumbWordStyle] = useState<"preset" | "few" | "many">("preset");
   const [sceneImageModelId, setSceneImageModelId] = useState("black-forest-labs/flux.2-pro");
+  const [fragmentSplitMode, setFragmentSplitMode] = useState<FragmentSplitMode>("range");
   const [sceneImageLoading, setSceneImageLoading] = useState<number | null>(null);
   const [sceneImageError, setSceneImageError] = useState<string | null>(null);
   const [storageMode, setStorageModeState] = useState<"cloud" | "local">("cloud");
   const [localFolderName, setLocalFolderNameState] = useState<string | null>(null);
-  
+
   // Dynamic split method state (Iteration 1)
   const [splitConfig, setSplitConfig] = useState<SplitConfigState>({
     method: "strict",
@@ -140,38 +141,38 @@ export default function VideoEditorPage() {
       fetch("/api/presets").then((r) => r.json()),
       fetch("/api/ai/models").then((r) => r.json()),
     ])
-    .then(([videoData, presetsData, modelsData]) => {
-      if (videoData.video) setVideo(videoData.video);
-      if (presetsData.presets) setPresets(presetsData.presets);
-      if (modelsData.models?.length) {
-        setAiModels(modelsData.models);
-        const list = modelsData.models as AIModelItem[];
-        const preferred =
-          list.find((m: AIModelItem) => m.costTier === "free") ??
-          list.find((m: AIModelItem) => SCRIPT_RECOMMENDED_IDS.has(m.openRouterId || m.id)) ??
-          list[0];
-        if (
-          list.length &&
-          (!modelId || !list.some((m: AIModelItem) => (m.openRouterId || m.id) === modelId))
-        ) {
-          setModelId(preferred?.openRouterId || preferred?.id || list[0].openRouterId || list[0].id);
-        } else if (!modelId && preferred) {
-          setModelId(preferred.openRouterId || preferred.id);
-        } else if (!modelId && list[0]) {
-          setModelId(list[0].openRouterId || list[0].id);
+      .then(([videoData, presetsData, modelsData]) => {
+        if (videoData.video) setVideo(videoData.video);
+        if (presetsData.presets) setPresets(presetsData.presets);
+        if (modelsData.models?.length) {
+          setAiModels(modelsData.models);
+          const list = modelsData.models as AIModelItem[];
+          const preferred =
+            list.find((m: AIModelItem) => m.costTier === "free") ??
+            list.find((m: AIModelItem) => SCRIPT_RECOMMENDED_IDS.has(m.openRouterId || m.id)) ??
+            list[0];
+          if (
+            list.length &&
+            (!modelId || !list.some((m: AIModelItem) => (m.openRouterId || m.id) === modelId))
+          ) {
+            setModelId(preferred?.openRouterId || preferred?.id || list[0].openRouterId || list[0].id);
+          } else if (!modelId && preferred) {
+            setModelId(preferred.openRouterId || preferred.id);
+          } else if (!modelId && list[0]) {
+            setModelId(list[0].openRouterId || list[0].id);
+          }
+        } else {
+          setAiModels(
+            AI_MODELS.map((m) => ({
+              id: m.id,
+              name: m.name,
+              provider: m.provider,
+              costTier: m.costTier,
+              openRouterId: null,
+            }))
+          );
         }
-      } else {
-        setAiModels(
-          AI_MODELS.map((m) => ({
-            id: m.id,
-            name: m.name,
-            provider: m.provider,
-            costTier: m.costTier,
-            openRouterId: null,
-          }))
-        );
-      }
-    });
+      });
   }, [projectId, videoId]);
 
   useEffect(() => {
@@ -279,9 +280,9 @@ export default function VideoEditorPage() {
       setVideo((prev) =>
         prev && thumbnail
           ? {
-              ...prev,
-              thumbnails: [{ ...thumbnail, blobUrl: thumbnail.blobUrl }, ...prev.thumbnails],
-            }
+            ...prev,
+            thumbnails: [{ ...thumbnail, blobUrl: thumbnail.blobUrl }, ...prev.thumbnails],
+          }
           : prev
       );
       setThumbError(localSaveError ?? null);
@@ -375,10 +376,10 @@ export default function VideoEditorPage() {
         setVideo((prev) =>
           prev
             ? {
-                ...prev,
-                ...(type === "title" && { title: data.generated as string }),
-                ...(type === "description" && { description: data.generated as string }),
-              }
+              ...prev,
+              ...(type === "title" && { title: data.generated as string }),
+              ...(type === "description" && { description: data.generated as string }),
+            }
             : null
         );
       }
@@ -530,12 +531,12 @@ export default function VideoEditorPage() {
       setVideo((prev) =>
         prev
           ? {
-              ...prev,
-              thumbnails: [
-                { ...thumb, blobUrl: thumb.blobUrl, fragmentIndex: thumb.fragmentIndex },
-                ...prev.thumbnails,
-              ],
-            }
+            ...prev,
+            thumbnails: [
+              { ...thumb, blobUrl: thumb.blobUrl, fragmentIndex: thumb.fragmentIndex },
+              ...prev.thumbnails,
+            ],
+          }
           : prev
       );
     } catch (e) {
@@ -562,12 +563,12 @@ export default function VideoEditorPage() {
   const allScriptModels = aiModels.length
     ? aiModels
     : AI_MODELS.map((m) => ({
-        id: m.id,
-        name: m.name,
-        provider: m.provider,
-        costTier: m.costTier,
-        openRouterId: null as string | null,
-      }));
+      id: m.id,
+      name: m.name,
+      provider: m.provider,
+      costTier: m.costTier,
+      openRouterId: null as string | null,
+    }));
   const modelsForScriptDropdown = [...allScriptModels].sort((a, b) => {
     const aRec = SCRIPT_RECOMMENDED_IDS.has(a.openRouterId || a.id) ? 1 : 0;
     const bRec = SCRIPT_RECOMMENDED_IDS.has(b.openRouterId || b.id) ? 1 : 0;
@@ -821,12 +822,30 @@ export default function VideoEditorPage() {
                       {sceneImageError}
                     </p>
                   )}
+                  <div className="flex flex-wrap items-center gap-3 mb-4">
+                    <label className="text-xs font-medium text-[rgb(var(--text-muted))] shrink-0">
+                      Cómo dividir el guion en escenas:
+                    </label>
+                    <select
+                      value={fragmentSplitMode}
+                      onChange={(e) => setFragmentSplitMode(e.target.value as FragmentSplitMode)}
+                      className="rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--bg-muted))] px-3 py-2 text-sm text-[rgb(var(--text-primary))] focus:outline-none focus:ring-2 focus:ring-[rgb(var(--accent))] max-w-full"
+                    >
+                      <option value="range">
+                        Rango fijo (máx. {FRAGMENT_MAX_WORDS} palabras por escena)
+                      </option>
+                      <option value="punctuation">
+                        Por signos de puntuación (frases u oraciones)
+                      </option>
+                    </select>
+                  </div>
                   <div className="mb-6">
                     <h3 className="text-sm font-medium text-[rgb(var(--text-primary))] mb-2">
                       Timeline del script
                     </h3>
                     <ScriptTimeline
                       scriptContent={scriptContentForFragments}
+                      fragmentSplitMode={fragmentSplitMode}
                       sceneImageModelId={sceneImageModelId}
                       onSceneImageModelChange={setSceneImageModelId}
                       onGenerateScene={handleGenerateScene}
@@ -878,6 +897,7 @@ export default function VideoEditorPage() {
                   <div className="overflow-x-auto max-h-[520px] overflow-y-auto">
                     <ScriptFragmentsTable
                       scriptContent={scriptContentForFragments}
+                      fragmentSplitMode={fragmentSplitMode}
                       sceneImageModelId={sceneImageModelId}
                       onSceneImageModelChange={setSceneImageModelId}
                       onGenerateScene={handleGenerateScene}
@@ -1015,7 +1035,7 @@ export default function VideoEditorPage() {
                     <button
                       key={i}
                       type="button"
-                      onClick={() => navigator.clipboard.writeText(tag).catch(() => {})}
+                      onClick={() => navigator.clipboard.writeText(tag).catch(() => { })}
                       className="rounded-md border border-[rgb(var(--border))] bg-[rgb(var(--bg-surface))] px-2.5 py-1 text-sm text-[rgb(var(--text-primary))] hover:bg-[rgb(var(--accent-soft))] hover:border-[rgb(var(--accent))]"
                     >
                       {tag}
@@ -1024,7 +1044,7 @@ export default function VideoEditorPage() {
                 </div>
                 <button
                   type="button"
-                  onClick={() => navigator.clipboard.writeText(generatedTags.join(", ")).catch(() => {})}
+                  onClick={() => navigator.clipboard.writeText(generatedTags.join(", ")).catch(() => { })}
                   className="mt-3 text-xs text-[rgb(var(--accent))] hover:underline"
                 >
                   Copiar todas
