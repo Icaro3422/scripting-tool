@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { auth } from "@clerk/nextjs/server";
 import { listElevenLabsVoices, listMinimaxVoices } from "@/lib/voices/ai33";
 import { VOICE_CATALOG } from "@/lib/voices/voiceCatalog";
 
@@ -23,6 +24,9 @@ export async function GET(req: NextRequest) {
   }
 
   try {
+    const { userId } = await auth();
+    if (!userId) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
+
     const { searchParams } = new URL(req.url);
     const provider = searchParams.get("provider") ?? "all"; // elevenlabs | minimax | all
     const lang = searchParams.get("lang")?.toLowerCase() ?? "";

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { auth } from "@clerk/nextjs/server";
 import { AI_MODELS } from "@/types/ai";
 
 const OPENROUTER_API = "https://openrouter.ai/api/v1/models";
@@ -11,6 +12,9 @@ const OPENROUTER_API = "https://openrouter.ai/api/v1/models";
  */
 export async function GET() {
   try {
+    const { userId } = await auth();
+    if (!userId) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
+
     const staticModels = AI_MODELS.map((m) => ({
       id: m.id,
       name: m.name,

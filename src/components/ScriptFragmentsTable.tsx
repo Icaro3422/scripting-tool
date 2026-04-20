@@ -2,6 +2,7 @@
 
 import { useState, useMemo, useEffect } from "react";
 import { splitByMethod, type SplitMethod, type SplitConfigState, type PromptResult } from "@/lib/text-processing";
+import { type FragmentSplitMode } from "@/lib/scriptUtils";
 import { ImageIcon, Copy, Check, Loader2 } from "lucide-react";
 import { LocalThumbnailImage } from "@/components/LocalThumbnailImage";
 import { LOCAL_URL_PREFIX } from "@/lib/client-storage";
@@ -23,6 +24,7 @@ const SCENE_IMAGE_MODELS: SceneImageModel[] = [
 
 interface ScriptFragmentsTableProps {
   scriptContent: string;
+  fragmentSplitMode: FragmentSplitMode;
   sceneImageModelId: string;
   onSceneImageModelChange: (id: string) => void;
   onGenerateScene?: (fragmentIndex: number, text: string) => void;
@@ -41,6 +43,7 @@ interface ScriptFragmentsTableProps {
 
 export function ScriptFragmentsTable({
   scriptContent,
+  fragmentSplitMode,
   sceneImageModelId,
   onSceneImageModelChange,
   onGenerateScene,
@@ -89,9 +92,9 @@ export function ScriptFragmentsTable({
     const text = lines.join("\n");
     navigator.clipboard.writeText(text)
       .then(() => {
-      setCopiedBlock(from);
-      setTimeout(() => setCopiedBlock(null), 1500);
-    });
+        setCopiedBlock(from);
+        setTimeout(() => setCopiedBlock(null), 1500);
+      });
   }
 
   function handlePromptEdit(fragmentId: number, value: string) {
@@ -188,7 +191,7 @@ export function ScriptFragmentsTable({
                         value={row.prompt}
                         onChange={(e) => handlePromptEdit(row.index, e.target.value)}
                         onBlur={() => handlePromptBlur(row.index)}
-                        
+
                         rows={2}
                         className="w-full rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--bg-muted))] px-2 py-1.5 text-xs text-[rgb(var(--text-primary))] placeholder:text-[rgb(var(--text-muted))] focus:outline-none focus:ring-2 focus:ring-[rgb(var(--accent))] resize-none"
                       />

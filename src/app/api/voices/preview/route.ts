@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createElevenLabsTts, createMinimaxTts, pollTask } from "@/lib/voices/ai33";
+import { auth } from "@clerk/nextjs/server";
 
 /**
  * POST /api/voices/preview
@@ -24,6 +25,9 @@ const SAMPLE_TEXTS: Record<string, string> = {
 };
 
 export async function POST(req: NextRequest) {
+  const { userId } = await auth();
+  if (!userId) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
+
   const key = process.env.AI33_API_KEY;
   if (!key) {
     return NextResponse.json(
