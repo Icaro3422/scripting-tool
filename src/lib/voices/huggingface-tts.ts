@@ -1,23 +1,11 @@
 /**
- * Hugging Face TTS (Text-to-Speech).
- * Modelos sugeridos: microsoft/speecht5_tts, suno/bark, tts-hub/XTTS-v2.
- * Uso: obtener HUGGINGFACE_API_KEY desde https://huggingface.co/settings/tokens
- * y llamar a la Inference API o usar este módulo para futura integración.
+ * @deprecated — Reemplazado por AI33 Pro (src/lib/voices/ai33.ts).
+ * Conservado como stub para no romper imports existentes.
  */
-
-const HF_INFERENCE_TTS = "https://api-inference.huggingface.co/models/microsoft/speecht5_tts";
-
 export async function synthesize(
   _text: string,
   _options?: { voiceId?: string; lang?: string }
 ): Promise<ArrayBuffer | null> {
-  const token = process.env.HUGGINGFACE_API_KEY;
-  if (!token) {
-    console.warn("HUGGINGFACE_API_KEY no configurada");
-    return null;
-  }
-  // TODO: implementar llamada a Inference API
-  // const res = await fetch(HF_INFERENCE_TTS, { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify({ inputs: text }) });
-  // return res.arrayBuffer();
+  console.warn("synthesize() is deprecated. Use AI33 Pro TTS via /api/voices/preview.");
   return null;
 }
