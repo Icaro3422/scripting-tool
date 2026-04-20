@@ -1,106 +1,129 @@
 import { NextRequest, NextResponse } from "next/server";
-import { InferenceClient } from "@huggingface/inference";
-import { getVoiceById } from "@/lib/voices/voiceCatalog";
-
-/** Modelo TTS único que soporta varios idiomas vía el cliente HF (evita 404 por modelo no disponible en router). */
-const TTS_MODEL = "facebook/mms-tts-eng";
-
-const SAMPLE_TEXTS: Record<string, string> = {
-  en: "Hello. This is a short preview of this voice.",
-  es: "Hola. Esta es una breve muestra de esta voz.",
-  fr: "Bonjour. Ceci est un court aperçu de cette voix.",
-  de: "Hallo. Das ist eine kurze Vorschau dieser Stimme.",
-  it: "Ciao. Questa è una breve anteprima di questa voce.",
-  pt: "Olá. Esta é uma amostra curta desta voz.",
-  zh: "你好。这是此声音的简短预览。",
-  ja: "こんにちは。この音声の短いプレビューです。",
-  hi: "नमस्ते। यह इस आवाज का एक संक्षिप्त पूर्वावलोकन है।",
-};
-
-const DEFAULT_SAMPLE = "This is a voice preview.";
+import { createElevenLabsTts, createMinimaxTts, pollTask } from "@/lib/voices/ai33";
 
 /**
  * POST /api/voices/preview
- * Genera audio de vista previa usando el cliente oficial de Hugging Face (@huggingface/inference).
- * Body: { voiceId: string, text?: string }
- * Necesita HUGGINGFACE_API_KEY en .env.
+ * Generates TTS audio via AI33 Pro (ElevenLabs or Minimax).
+ * Body: { voiceId: string, provider: "elevenlabs"|"minimax", text?: string }
+ * Returns: audio/mpeg binary for inline playback.
  */
+
+const SAMPLE_TEXTS: Record<string, string> = {
+  en: "Hello. This is a short preview of this AI voice.",
+  es: "Hola. Esta es una breve muestra de esta voz de inteligencia artificial.",
+  fr: "Bonjour. Ceci est un court aperçu de cette voix.",
+  de: "Hallo. Das ist eine kurze Vorschau dieser KI-Stimme.",
+  it: "Ciao. Questa è una breve anteprima di questa voce IA.",
+  pt: "Olá. Esta é uma amostra curta desta voz de IA.",
+  zh: "你好。这是此人工智能声音的简短预览。",
+  ja: "こんにちは。このAI音声の短いプレビューです。",
+  hi: "नमस्ते। यह इस AI आवाज़ का एक संक्षिप्त पूर्वावलोकन है।",
+  ko: "안녕하세요. 이 AI 음성의 짧은 미리 보기입니다.",
+  ar: "مرحبا. هذا معاينة قصيرة لهذا الصوت الذكي.",
+  ru: "Привет. Это краткий предварительный просмотр этого голоса ИИ.",
+};
+
 export async function POST(req: NextRequest) {
-  const key = process.env.HUGGINGFACE_API_KEY;
+  const key = process.env.AI33_API_KEY;
   if (!key) {
     return NextResponse.json(
       {
-        error: "HUGGINGFACE_API_KEY no configurada",
-        code: "HF_KEY_MISSING",
-        hint: "Añade tu API key en .env. Crea una en https://huggingface.co/settings/tokens (tipo Read). Ver CONFIGURACION.md.",
+        error: "AI33_API_KEY no configurada",
+        code: "AI33_KEY_MISSING",
+        hint: "Añade AI33_API_KEY en .env. Obtén tu key en https://ai33.pro",
       },
       { status: 503 }
     );
   }
 
+  let body: { voiceId?: string; provider?: string; text?: string; lang?: string };
   try {
-    const body = await req.json().catch(() => ({}));
-    const voiceId = typeof body.voiceId === "string" ? body.voiceId.trim() : "";
-    const customText = typeof body.text === "string" ? body.text.trim().slice(0, 200) : null;
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Body JSON inválido" }, { status: 400 });
+  }
 
-    if (!voiceId) {
-      return NextResponse.json({ error: "voiceId requerido" }, { status: 400 });
+  const voiceId = (body.voiceId ?? "").trim();
+  const provider = (body.provider ?? "elevenlabs").toLowerCase();
+  const lang = (body.lang ?? "es").split("-")[0];
+  const text = (body.text ?? "").trim() ||
+    SAMPLE_TEXTS[lang] ||
+    SAMPLE_TEXTS.es;
+
+  if (!voiceId) {
+    return NextResponse.json({ error: "voiceId requerido" }, { status: 400 });
+  }
+
+  try {
+    // 1. Submit TTS task
+    let taskResp;
+    if (provider === "minimax") {
+      taskResp = await createMinimaxTts({ voiceId, text });
+    } else {
+      taskResp = await createElevenLabsTts({ voiceId, text });
     }
 
-    const voice = getVoiceById(voiceId);
-    const lang = voice?.languageCode?.split("-")[0] ?? "en";
-    const text = customText || SAMPLE_TEXTS[lang] || SAMPLE_TEXTS.en || DEFAULT_SAMPLE;
-
-    const client = new InferenceClient(key);
-
-    const blob = await client.textToSpeech({
-      model: TTS_MODEL,
-      inputs: text,
-    });
-
-    if (!blob || !(blob instanceof Blob)) {
+    if (!taskResp.success || !taskResp.task_id) {
       return NextResponse.json(
-        { error: "Error al generar audio", detail: "Respuesta inválida del modelo" },
+        { error: "No se pudo crear la tarea TTS", detail: JSON.stringify(taskResp) },
         { status: 502 }
       );
     }
 
-    const arrayBuffer = await blob.arrayBuffer();
-    const contentType = blob.type || "audio/wav";
+    // 2. Poll until done (max 45s)
+    const task = await pollTask(taskResp.task_id, { maxMs: 45_000, intervalMs: 1_500 });
+
+    if (task.status === "error") {
+      return NextResponse.json(
+        { error: task.error_message ?? "Error en tarea TTS" },
+        { status: 502 }
+      );
+    }
+
+    // 3. Resolve audio URL from metadata
+    const meta = task.metadata ?? {};
+    const audioUrl =
+      (meta.audio_url as string) ??
+      (meta.output_uri as string) ??
+      null;
+
+    if (!audioUrl) {
+      return NextResponse.json(
+        { error: "Tarea completada pero sin audio_url", detail: JSON.stringify(meta) },
+        { status: 502 }
+      );
+    }
+
+    // 4. Proxy audio to browser
+    const audioRes = await fetch(audioUrl);
+    if (!audioRes.ok) {
+      return NextResponse.json(
+        { error: "No se pudo descargar el audio generado" },
+        { status: 502 }
+      );
+    }
+
+    const arrayBuffer = await audioRes.arrayBuffer();
+    const contentType = audioRes.headers.get("content-type") || "audio/mpeg";
 
     return new NextResponse(arrayBuffer, {
       status: 200,
       headers: {
         "Content-Type": contentType,
-        "Cache-Control": "private, max-age=60",
+        "Cache-Control": "private, max-age=120",
       },
     });
   } catch (e: unknown) {
-    console.error(e);
+    console.error("POST /api/voices/preview error:", e);
     const message = e instanceof Error ? e.message : String(e);
-    const is404 = message.includes("404") || message.includes("Not Found");
-    const is503 = message.includes("503") || message.includes("loading");
-    if (is404) {
-      return NextResponse.json(
-        {
-          error: "Modelo de voz no disponible",
-          detail: "El servicio de vista previa de Hugging Face no tiene este modelo disponible en este momento. Puedes probar las voces en el Space Kokoro-TTS.",
-          code: "MODEL_UNAVAILABLE",
-        },
-        { status: 503 }
-      );
-    }
-    if (is503) {
-      return NextResponse.json(
-        {
-          error: "Modelo cargando. Espera un momento y vuelve a intentar.",
-          detail: message.slice(0, 200),
-        },
-        { status: 503 }
-      );
-    }
+    const isTimeout = message.includes("timeout");
     return NextResponse.json(
-      { error: "Error al generar vista previa", detail: message.slice(0, 300) },
+      {
+        error: isTimeout
+          ? "La generación de voz tardó demasiado. Intenta de nuevo."
+          : "Error al generar vista previa de voz",
+        detail: message.slice(0, 300),
+      },
       { status: 500 }
     );
   }
