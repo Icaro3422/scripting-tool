@@ -1,0 +1,4 @@
+#!/bin/sh
+. "$(dirname "$0")/_/husky.sh"
+
+/Users/pivelcode/.bun/bin/bun scripts/validate-commit.mjs "$1"

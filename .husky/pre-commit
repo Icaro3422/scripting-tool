@@ -1,0 +1,5 @@
+#!/bin/sh
+. "$(dirname "$0")/_/husky.sh"
+
+# Pre-commit checks disabled to avoid blocking commits.
+# You can add 'bun run lint' or 'bun test' here when ready.
