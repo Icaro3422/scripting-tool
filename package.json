@@ -13,7 +13,8 @@
     "db:migrate": "prisma migrate dev",
     "db:studio": "prisma studio",
     "postinstall": "prisma generate",
-    "pwa:icons": "node scripts/generate-pwa-icons.js"
+    "pwa:icons": "node scripts/generate-pwa-icons.js",
+    "prepare": "husky"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.0",
@@ -41,6 +42,7 @@
     "@types/react-dom": "^19.0.0",
     "eslint": "^9.16.0",
     "eslint-config-next": "^15.1.0",
+    "husky": "^9.1.7",
     "postcss": "^8.4.49",
     "prisma": "^6.9.0",
     "sharp": "^0.34.5",
