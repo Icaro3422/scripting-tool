@@ -33,6 +33,7 @@ export async function POST(req: NextRequest) {
       provider: providerParam,
       type,
       targetDurationMinutes,
+      content: manualContent,
     } = body as {
       projectId?: string;
       videoId?: string;
@@ -42,13 +43,83 @@ export async function POST(req: NextRequest) {
       provider?: string;
       type: "script" | "title" | "description" | "tags";
       targetDurationMinutes?: number;
+      content?: string;
     };
 
-    if ((!projectIdParam && !videoId) || !topic || !modelId || !type) {
+    if (manualContent !== undefined) {
+      if (!manualContent || !manualContent.trim()) {
+        return NextResponse.json({ error: "Content is required" }, { status: 400 });
+      }
+      if (manualContent.trim().length < 50) {
+        return NextResponse.json({ error: "Content too short (minimum 50 characters)" }, { status: 400 });
+      }
+      if (manualContent.trim().length > 51200) {
+        return NextResponse.json({ error: "Content exceeds 50KB limit" }, { status: 400 });
+      }
+    }
+
+    if (!manualContent && (!projectIdParam || !topic || !modelId || !type)) {
       return NextResponse.json(
-        { error: "projectId o videoId, topic, modelId y type son requeridos" },
+        { error: "projectId, topic, modelId y type son requeridos" },
         { status: 400 }
       );
+    }
+
+    if (manualContent && type === "script") {
+      let targetVideoId: string | null = null;
+      let targetProjectId: string | null = null;
+      let targetTitle = "Script Manual";
+
+      if (videoId) {
+        const v = await prisma.video.findFirst({ where: { id: videoId, project: { userId: user.id } } });
+        if (!v) return NextResponse.json({ error: "Video no encontrado" }, { status: 404 });
+        targetVideoId = v.id;
+        targetProjectId = v.projectId;
+        targetTitle = v.title;
+      } else {
+        const p = await prisma.project.findFirst({ where: { id: projectIdParam!, userId: user.id } });
+        if (!p) return NextResponse.json({ error: "Proyecto no encontrado" }, { status: 404 });
+        targetProjectId = p.id;
+        targetTitle = p.title;
+      }
+
+      const trimmed = manualContent.trim();
+      const wordCount = countWords(trimmed);
+      const estimatedDurationMin = estimatedMinutes(wordCount);
+
+      const script = await prisma.script.create({
+        data: {
+          userId: user.id,
+          videoId: targetVideoId,
+          projectId: targetVideoId ? null : targetProjectId,
+          title: targetTitle,
+          content: trimmed,
+          aiProvider: null,
+          aiModel: null,
+          source: "manual",
+        },
+        include: { video: true, project: true },
+      });
+
+      if (targetVideoId) {
+        await prisma.video.update({
+          where: { id: targetVideoId },
+          data: { status: "script_ready" },
+        });
+      } else if (targetProjectId) {
+        await prisma.project.update({
+          where: { id: targetProjectId },
+          data: { status: "script_ready" },
+        });
+      }
+
+      return NextResponse.json({
+        script,
+        generated: trimmed,
+        wordCount,
+        estimatedDurationMinutes: estimatedDurationMin,
+        source: "manual",
+      });
     }
 
     let projectId: string;
@@ -149,6 +220,7 @@ export async function POST(req: NextRequest) {
           content: trimmed,
           aiProvider: provider,
           aiModel: modelForApi,
+          source: "ai",
         },
         include: { video: true, project: true },
       });

@@ -47,6 +47,7 @@ interface Script {
   title: string;
   content: string;
   aiModel: string | null;
+  source?: string;
   createdAt: string;
 }
 
@@ -81,6 +82,8 @@ export default function VideoEditorPage() {
   const [aiModels, setAiModels] = useState<AIModelItem[]>([]);
   const [tab, setTab] = useState<TabId>("script");
   const [topic, setTopic] = useState("");
+  const [pastedScript, setPastedScript] = useState("");
+  const [scriptMode, setScriptMode] = useState<"generate" | "paste">("generate");
   const [targetDurationId, setTargetDurationId] = useState<string>("5");
   const [modelId, setModelId] = useState(AI_MODELS[0]?.id ?? "");
   const [presetId, setPresetId] = useState<string>("");
@@ -295,10 +298,12 @@ export default function VideoEditorPage() {
 
   async function handleGenerate(type: "script" | "title" | "description" | "tags") {
     const topicText = type === "script" ? topic : video?.title ?? topic;
-    if (!topicText.trim()) {
-      setError("Escribe el tema o título para generar.");
+    
+    if (!topicText.trim() && (scriptMode !== "paste" || !pastedScript.trim())) {
+      setError(scriptMode === "paste" ? "Pega un guion primero." : "Escribe el tema o título para generar.");
       return;
     }
+    
     setLoading(true);
     setError(null);
     try {
@@ -306,18 +311,26 @@ export default function VideoEditorPage() {
         type === "script"
           ? DURATION_PRESETS.find((p) => p.id === targetDurationId)?.minutes ?? 5
           : undefined;
+
+      const requestBody: Record<string, unknown> = {
+        videoId,
+        type,
+      };
+
+      if (scriptMode === "paste" && type === "script") {
+        requestBody.content = pastedScript;
+      } else {
+        requestBody.presetId = presetId || undefined;
+        requestBody.topic = topicText;
+        requestBody.modelId = aiModels.find((m) => (m.openRouterId || m.id) === modelId)?.openRouterId || modelId;
+        requestBody.provider = aiModels.find((m) => (m.openRouterId || m.id) === modelId)?.provider;
+        requestBody.targetDurationMinutes = targetMinutes;
+      }
+
       const res = await fetch("/api/script/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          videoId,
-          presetId: presetId || undefined,
-          topic: topicText,
-          modelId: aiModels.find((m) => (m.openRouterId || m.id) === modelId)?.openRouterId || modelId,
-          provider: aiModels.find((m) => (m.openRouterId || m.id) === modelId)?.provider,
-          type,
-          targetDurationMinutes: targetMinutes,
-        }),
+        body: JSON.stringify(requestBody),
       });
       const raw = await res.text();
       let data: {
@@ -371,6 +384,10 @@ export default function VideoEditorPage() {
         setVideo((prev) =>
           prev ? { ...prev, scripts: [newScript, ...prev.scripts] } : null
         );
+        if (scriptMode === "paste") {
+          setPastedScript("");
+          setScriptMode("generate");
+        }
       }
       if (data.generated && (type === "title" || type === "description")) {
         setVideo((prev) =>
@@ -422,13 +439,15 @@ export default function VideoEditorPage() {
         targetChunks: splitConfig.targetChunks,
       });
 
+      const requestBody = {
+        fragments: fragments.map((f) => ({ id: f.id, text: f.text })),
+        style: imageStyle,
+      };
+      console.log("[handleGeneratePrompts] Request:", JSON.stringify(requestBody).slice(0, 500));
       const res = await fetch("/api/prompts/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          fragments: fragments.map((f) => ({ id: f.id, text: f.text })),
-          style: imageStyle,
-        }),
+        body: JSON.stringify(requestBody),
       });
       const data = await res.json().catch(() => null);
       if (!res.ok) {
@@ -725,50 +744,114 @@ export default function VideoEditorPage() {
       {tab === "script" && (
         <div className="space-y-6">
           <div className="rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--bg-surface))] p-4">
-            <label className="block text-sm font-medium text-[rgb(var(--text-primary))] mb-2">
-              Tema del video (para generar el guion)
-            </label>
-            <div className="flex flex-wrap gap-2 items-end">
-              <input
-                type="text"
-                value={topic}
-                onChange={(e) => setTopic(e.target.value)}
-                placeholder="Ej: 5 tips para editar más rápido"
-                className="flex-1 min-w-[200px] rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--bg-muted))] px-3 py-2.5 text-[rgb(var(--text-primary))] placeholder:text-[rgb(var(--text-muted))] focus:outline-none focus:ring-2 focus:ring-[rgb(var(--accent))]"
-              />
-              <div className="flex items-center gap-2">
-                <label className="text-xs text-[rgb(var(--text-muted))] whitespace-nowrap">
-                  Duración objetivo
-                </label>
-                <select
-                  value={targetDurationId}
-                  onChange={(e) => setTargetDurationId(e.target.value)}
-                  className="rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--bg-muted))] px-3 py-2.5 text-[rgb(var(--text-primary))] focus:outline-none focus:ring-2 focus:ring-[rgb(var(--accent))]"
-                >
-                  {DURATION_PRESETS.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
+            <div className="flex gap-2 mb-4">
               <button
                 type="button"
-                onClick={() => handleGenerate("script")}
-                disabled={loading}
-                className="rounded-lg bg-[rgb(var(--accent))] px-4 py-2.5 text-white font-medium hover:opacity-90 disabled:opacity-50 flex items-center gap-2"
-              >
-                {loading ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Sparkles className="h-4 w-4" />
+                onClick={() => setScriptMode("generate")}
+                className={cn(
+                  "px-3 py-1.5 text-sm font-medium rounded-lg transition",
+                  scriptMode === "generate"
+                    ? "bg-[rgb(var(--accent))] text-white"
+                    : "bg-[rgb(var(--bg-muted))] text-[rgb(var(--text-muted))] hover:text-[rgb(var(--text-primary))]"
                 )}
-                Generar script
+              >
+                Generar
+              </button>
+              <button
+                type="button"
+                onClick={() => setScriptMode("paste")}
+                className={cn(
+                  "px-3 py-1.5 text-sm font-medium rounded-lg transition",
+                  scriptMode === "paste"
+                    ? "bg-[rgb(var(--accent))] text-white"
+                    : "bg-[rgb(var(--bg-muted))] text-[rgb(var(--text-muted))] hover:text-[rgb(var(--text-primary))]"
+                )}
+              >
+                Pegar
               </button>
             </div>
-            <p className="text-xs text-[rgb(var(--text-muted))] mt-2">
-              La longitud del guion determina la duración del video (~150 palabras/min).
-            </p>
+
+            {scriptMode === "generate" ? (
+              <div className="space-y-4">
+                <label className="block text-sm font-medium text-[rgb(var(--text-primary))] mb-2">
+                  Tema del video (para generar el guion)
+                </label>
+                <div className="flex flex-wrap gap-2 items-end">
+                  <input
+                    type="text"
+                    value={topic}
+                    onChange={(e) => setTopic(e.target.value)}
+                    placeholder="Ej: 5 tips para editar más rápido"
+                    className="flex-1 min-w-[200px] rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--bg-muted))] px-3 py-2.5 text-[rgb(var(--text-primary))] placeholder:text-[rgb(var(--text-muted))] focus:outline-none focus:ring-2 focus:ring-[rgb(var(--accent))]"
+                  />
+                  <div className="flex items-center gap-2">
+                    <label className="text-xs text-[rgb(var(--text-muted))] whitespace-nowrap">
+                      Duración objetivo
+                    </label>
+                    <select
+                      value={targetDurationId}
+                      onChange={(e) => setTargetDurationId(e.target.value)}
+                      className="rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--bg-muted))] px-3 py-2.5 text-[rgb(var(--text-primary))] focus:outline-none focus:ring-2 focus:ring-[rgb(var(--accent))]"
+                    >
+                      {DURATION_PRESETS.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleGenerate("script")}
+                    disabled={loading}
+                    className="rounded-lg bg-[rgb(var(--accent))] px-4 py-2.5 text-white font-medium hover:opacity-90 disabled:opacity-50 flex items-center gap-2"
+                  >
+                    {loading ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Sparkles className="h-4 w-4" />
+                    )}
+                    Generar script
+                  </button>
+                </div>
+                <p className="text-xs text-[rgb(var(--text-muted))]">
+                  La longitud del guion determina la duración del video (~150 palabras/min).
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <label className="block text-sm font-medium text-[rgb(var(--text-primary))] mb-2">
+                  Pega tu guion aquí
+                </label>
+                <textarea
+                  value={pastedScript}
+                  onChange={(e) => setPastedScript(e.target.value)}
+                  placeholder="Pega tu guion aquí... El guion se usará para generar las escenas."
+                  className="w-full min-h-[200px] rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--bg-muted))] px-3 py-2.5 text-[rgb(var(--text-primary))] placeholder:text-[rgb(var(--text-muted))] focus:outline-none focus:ring-2 focus:ring-[rgb(var(--accent))] resize-y"
+                />
+                <div className="flex justify-between items-center">
+                  <p className="text-xs text-[rgb(var(--text-muted))]">
+                    {pastedScript.length} / 51200 caracteres
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => handleGenerate("script")}
+                    disabled={loading || !pastedScript.trim() || pastedScript.trim().length < 50}
+                    className="rounded-lg bg-[rgb(var(--accent))] px-4 py-2.5 text-white font-medium hover:opacity-90 disabled:opacity-50 flex items-center gap-2"
+                  >
+                    {loading ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Sparkles className="h-4 w-4" />
+                    )}
+                    Guardar script
+                  </button>
+                </div>
+                <p className="text-xs text-[rgb(var(--text-muted))]">
+                  Mínimo 50 caracteres. ~150 palabras = 1 minuto de video.
+                </p>
+              </div>
+            )}
           </div>
           {lastScriptStats && (
             <div className="rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--bg-muted))] px-4 py-3 flex flex-wrap gap-4 text-sm">
