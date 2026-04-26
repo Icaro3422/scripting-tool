@@ -192,7 +192,8 @@ function parseModelJson(rawText: string): PromptResult[] {
   candidates.push(trimmed);
 
   // Strategy 3: Try to find JSON array with regex (handles extra text)
-  const arrayMatch = trimmed.match(/\[[\s\S]*\]/s);
+  // Using [\s\S] to match any character including newlines (no /s flag needed)
+  const arrayMatch = trimmed.match(/\[[\s\S]*\]/);
   if (arrayMatch) {
     candidates.push(arrayMatch[0]);
   }
