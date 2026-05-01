@@ -39,6 +39,12 @@ interface ScriptFragmentsTableProps {
   prompts?: PromptResult[];
   /** Callback when a prompt is edited inline */
   onPromptChange?: (fragmentId: number, newPrompt: string) => void;
+  /** Callback to regenerate a single prompt */
+  onRegeneratePrompt?: (fragmentId: number) => void;
+  /** Fragment IDs currently being regenerated */
+  regeneratingPromptIds?: Set<number>;
+  /** Fragment IDs with missing or low-quality prompts */
+  invalidPromptIds?: Set<number>;
 }
 
 export function ScriptFragmentsTable({
@@ -53,6 +59,9 @@ export function ScriptFragmentsTable({
   splitConfig,
   prompts,
   onPromptChange,
+  onRegeneratePrompt,
+  regeneratingPromptIds = new Set<number>(),
+  invalidPromptIds = new Set<number>(),
 }: ScriptFragmentsTableProps) {
   const [copiedBlock, setCopiedBlock] = useState<number | null>(null);
   const [previewSceneIndex, setPreviewSceneIndex] = useState<number | null>(null);
@@ -187,16 +196,48 @@ export function ScriptFragmentsTable({
                 {hasPrompts && (
                   <td className="py-2.5 px-4">
                     {row.prompt !== undefined ? (
-                      <textarea
-                        value={row.prompt}
-                        onChange={(e) => handlePromptEdit(row.index, e.target.value)}
-                        onBlur={() => handlePromptBlur(row.index)}
-
-                        rows={2}
-                        className="w-full rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--bg-muted))] px-2 py-1.5 text-xs text-[rgb(var(--text-primary))] placeholder:text-[rgb(var(--text-muted))] focus:outline-none focus:ring-2 focus:ring-[rgb(var(--accent))] resize-none"
-                      />
+                      <div className="space-y-2">
+                        <textarea
+                          value={row.prompt}
+                          onChange={(e) => handlePromptEdit(row.index, e.target.value)}
+                          onBlur={() => handlePromptBlur(row.index)}
+                          rows={2}
+                          className={`w-full rounded-lg border bg-[rgb(var(--bg-muted))] px-2 py-1.5 text-xs text-[rgb(var(--text-primary))] placeholder:text-[rgb(var(--text-muted))] focus:outline-none focus:ring-2 focus:ring-[rgb(var(--accent))] resize-none ${
+                            invalidPromptIds.has(row.index) ? "border-red-500" : "border-[rgb(var(--border))]"
+                          }`}
+                        />
+                        <div className="flex items-center justify-between gap-2">
+                          {invalidPromptIds.has(row.index) ? (
+                            <span className="text-[11px] text-red-600 dark:text-red-400">Revisar prompt</span>
+                          ) : (
+                            <span />
+                          )}
+                          {onRegeneratePrompt && (
+                            <button
+                              type="button"
+                              onClick={() => onRegeneratePrompt(row.index)}
+                              disabled={regeneratingPromptIds.has(row.index)}
+                              className="rounded px-2 py-1 text-[11px] font-medium border border-[rgb(var(--border))] text-[rgb(var(--text-primary))] hover:bg-[rgb(var(--bg-muted))] disabled:opacity-50"
+                            >
+                              {regeneratingPromptIds.has(row.index) ? "Regenerando..." : "Regenerar prompt"}
+                            </button>
+                          )}
+                        </div>
+                      </div>
                     ) : (
-                      <span className="text-xs text-[rgb(var(--text-muted))] italic">Sin prompt</span>
+                      <div className="space-y-2">
+                        <span className="text-xs text-[rgb(var(--text-muted))] italic">Sin prompt</span>
+                        {onRegeneratePrompt && (
+                          <button
+                            type="button"
+                            onClick={() => onRegeneratePrompt(row.index)}
+                            disabled={regeneratingPromptIds.has(row.index)}
+                            className="block rounded px-2 py-1 text-[11px] font-medium border border-[rgb(var(--border))] text-[rgb(var(--text-primary))] hover:bg-[rgb(var(--bg-muted))] disabled:opacity-50"
+                          >
+                            {regeneratingPromptIds.has(row.index) ? "Regenerando..." : "Generar prompt"}
+                          </button>
+                        )}
+                      </div>
                     )}
                   </td>
                 )}

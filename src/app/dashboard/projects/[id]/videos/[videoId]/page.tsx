@@ -1,7 +1,7 @@
 "use client";
 
 import { useParams } from "next/navigation";
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useEffect, useState, useMemo } from "react";
 import Link from "next/link";
 import {
   FileText,
@@ -16,7 +16,7 @@ import {
 import { cn } from "@/lib/utils";
 import { AI_MODELS, SCRIPT_RECOMMENDED_IDS, THUMBNAIL_IMAGE_MODELS } from "@/types/ai";
 import { DURATION_PRESETS, FRAGMENT_MAX_WORDS, type FragmentSplitMode } from "@/lib/scriptUtils";
-import { countWords, estimatedMinutes, type SplitConfigState, type PromptResult } from "@/lib/text-processing";
+import { countWords, estimatedMinutes, splitByMethod, type SplitConfigState, type PromptResult } from "@/lib/text-processing";
 import { ScriptFragmentsTable } from "@/components/ScriptFragmentsTable";
 import { ScriptTimeline } from "@/components/ScriptTimeline";
 import { ScriptSplitConfig } from "@/components/ScriptSplitConfig";
@@ -41,6 +41,36 @@ interface AIModelItem {
 }
 
 type TabId = "script" | "title" | "description" | "tags" | "thumbnail";
+
+const promptGenerationClientBatchSize = Number.isFinite(Number(process.env.NEXT_PUBLIC_PROMPT_GENERATION_CLIENT_BATCH_SIZE))
+  ? Math.max(1, Math.floor(Number(process.env.NEXT_PUBLIC_PROMPT_GENERATION_CLIENT_BATCH_SIZE)))
+  : 5;
+
+type PromptFragmentRequest = {
+  id: number;
+  text: string;
+};
+
+type PromptPersistenceIdentity = {
+  scriptId: string;
+  style: string;
+  splitConfig: SplitConfigState;
+  fragmentCount: number;
+};
+
+function isLowQualityGeneratedPrompt(value: string | undefined): boolean {
+  if (!value) return true;
+
+  const trimmed = value.trim();
+  const withoutJsonPunctuation = trimmed.replace(/[\s{}\[\]"',.:;]+/g, "");
+
+  return (
+    trimmed.length < 24 ||
+    withoutJsonPunctuation.length < 12 ||
+    !/[a-zA-Z]/.test(trimmed) ||
+    /^[\s{}\[\]"',.:;\\/-]+$/.test(trimmed)
+  );
+}
 
 interface Script {
   id: string;
@@ -131,6 +161,8 @@ export default function VideoEditorPage() {
   const [generatedPrompts, setGeneratedPrompts] = useState<PromptResult[]>([]);
   const [promptsLoading, setPromptsLoading] = useState(false);
   const [promptsError, setPromptsError] = useState<string | null>(null);
+  const [promptsProgress, setPromptsProgress] = useState<{ done: number; total: number } | null>(null);
+  const [regeneratingPromptIds, setRegeneratingPromptIds] = useState<Set<number>>(new Set());
 
   useEffect(() => {
     setStorageModeState(getStorageMode());
@@ -410,13 +442,154 @@ export default function VideoEditorPage() {
     }
   }
 
-  const handlePromptChange = useCallback((fragmentId: number, newPrompt: string) => {
+  function getPromptPersistenceIdentity(): PromptPersistenceIdentity | null {
+    if (!latestScript?.id || !imageStyle.trim() || promptFragments.length === 0) {
+      return null;
+    }
+
+    return {
+      scriptId: latestScript.id,
+      style: imageStyle.trim(),
+      splitConfig,
+      fragmentCount: promptFragments.length,
+    };
+  }
+
+  async function persistPromptResults(
+    results: PromptResult[],
+    options: { source?: "ai" | "manual"; replaceSet?: boolean } = {},
+  ): Promise<PromptResult[]> {
+    const identity = getPromptPersistenceIdentity();
+    if (!identity || !projectId || !videoId) return results;
+
+    const res = await fetch(`/api/projects/${projectId}/videos/${videoId}/prompts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...identity,
+        results,
+        source: options.source ?? "ai",
+        replaceSet: options.replaceSet ?? false,
+      }),
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) {
+      const message = data && typeof data === "object" && typeof data.error === "string"
+        ? data.error
+        : "Error al guardar prompts";
+      throw new Error(message);
+    }
+
+    return data && typeof data === "object" && Array.isArray(data.results)
+      ? data.results as PromptResult[]
+      : results;
+  }
+
+  async function handlePromptChange(fragmentId: number, newPrompt: string) {
     setGeneratedPrompts((prev) =>
       prev.map((p) =>
         p.fragment_id === fragmentId ? { ...p, image_prompt: newPrompt } : p
       )
     );
-  }, []);
+    const identity = getPromptPersistenceIdentity();
+    const fragment = promptFragments.find((item) => item.id === fragmentId);
+    if (!identity || !fragment || !projectId || !videoId) return;
+
+    try {
+      const res = await fetch(`/api/projects/${projectId}/videos/${videoId}/prompts`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...identity,
+          fragmentId,
+          originalText: fragment.text,
+          imagePrompt: newPrompt,
+        }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        const message = data && typeof data === "object" && typeof data.error === "string"
+          ? data.error
+          : "Error al guardar edición del prompt";
+        throw new Error(message);
+      }
+    } catch (e) {
+      setPromptsError(e instanceof Error ? e.message : "Error al guardar edición del prompt");
+    }
+  }
+
+  async function requestPromptResults(fragments: PromptFragmentRequest[]): Promise<PromptResult[]> {
+    const res = await fetch("/api/prompts/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fragments, style: imageStyle }),
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) {
+      const errorMsg = data && typeof data === "object" && typeof data.error === "string"
+        ? data.error
+        : "Error al generar prompts";
+      throw new Error(errorMsg);
+    }
+    if (!data || typeof data !== "object" || !Array.isArray(data.results)) {
+      throw new Error("Respuesta inválida");
+    }
+
+    return data.results as PromptResult[];
+  }
+
+  function mergePromptResults(current: PromptResult[], updates: PromptResult[]): PromptResult[] {
+    const byId = new Map(current.map((prompt) => [prompt.fragment_id, prompt]));
+    for (const update of updates) {
+      byId.set(update.fragment_id, update);
+    }
+    return Array.from(byId.values()).sort((a, b) => a.fragment_id - b.fragment_id);
+  }
+
+  async function regeneratePromptFragments(fragmentIds: number[]) {
+    const uniqueIds = Array.from(new Set(fragmentIds)).sort((a, b) => a - b);
+    const fragmentsToRegenerate = promptFragments.filter((fragment) => uniqueIds.includes(fragment.id));
+
+    if (!fragmentsToRegenerate.length) {
+      setPromptsError("No encontré fragmentos para regenerar.");
+      return;
+    }
+    if (!imageStyle.trim()) {
+      setPromptsError("Selecciona un estilo de imagen.");
+      return;
+    }
+
+    setPromptsError(null);
+    setRegeneratingPromptIds((prev) => new Set([...prev, ...fragmentsToRegenerate.map((fragment) => fragment.id)]));
+    try {
+      for (let index = 0; index < fragmentsToRegenerate.length; index += promptGenerationClientBatchSize) {
+        const chunk = fragmentsToRegenerate.slice(index, index + promptGenerationClientBatchSize);
+        const results = await requestPromptResults(chunk);
+        const persistedResults = await persistPromptResults(results);
+        setGeneratedPrompts((prev) => mergePromptResults(prev, persistedResults));
+        setRegeneratingPromptIds((prev) => {
+          const next = new Set(prev);
+          for (const fragment of chunk) next.delete(fragment.id);
+          return next;
+        });
+      }
+    } catch (e) {
+      const message = e instanceof TypeError && e.message.toLowerCase().includes("fetch")
+        ? "Se perdió la conexión con el servidor durante la regeneración. Los prompts parciales se conservaron."
+        : e instanceof Error ? e.message : "Error";
+      setPromptsError(message);
+    } finally {
+      setRegeneratingPromptIds((prev) => {
+        const next = new Set(prev);
+        for (const fragment of fragmentsToRegenerate) next.delete(fragment.id);
+        return next;
+      });
+    }
+  }
+
+  async function handleRegenerateProblemPrompts() {
+    await regeneratePromptFragments(Array.from(invalidPromptIds));
+  }
 
   async function handleGeneratePrompts() {
     if (!scriptContentForFragments.trim()) {
@@ -429,43 +602,34 @@ export default function VideoEditorPage() {
     }
     setPromptsLoading(true);
     setPromptsError(null);
+    setGeneratedPrompts([]);
+    setPromptsProgress(null);
     try {
-      // Split the script to get fragments with IDs
-      const { splitByMethod } = await import("@/lib/text-processing");
-      const method = splitConfig.method;
-      const fragments = splitByMethod(scriptContentForFragments, method, {
-        minWords: splitConfig.strictMinWords,
-        maxWords: splitConfig.strictMaxWords,
-        targetChunks: splitConfig.targetChunks,
-      });
+      const allResults: PromptResult[] = [];
+      setPromptsProgress({ done: 0, total: promptFragments.length });
 
-      const requestBody = {
-        fragments: fragments.map((f) => ({ id: f.id, text: f.text })),
-        style: imageStyle,
-      };
-      console.log("[handleGeneratePrompts] Request:", JSON.stringify(requestBody).slice(0, 500));
-      const res = await fetch("/api/prompts/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(requestBody),
-      });
-      const data = await res.json().catch(() => null);
-      if (!res.ok) {
-        const errorMsg = data && typeof data === "object" && typeof data.error === "string"
-          ? data.error
-          : "Error al generar prompts";
-        setPromptsError(errorMsg);
-        return;
+      for (let index = 0; index < promptFragments.length; index += promptGenerationClientBatchSize) {
+        const chunk = promptFragments.slice(index, index + promptGenerationClientBatchSize);
+        console.log(
+          `[handleGeneratePrompts] Request chunk ${Math.floor(index / promptGenerationClientBatchSize) + 1}:`,
+          JSON.stringify({ fragments: chunk, style: imageStyle }).slice(0, 500),
+        );
+
+        const chunkResults = await requestPromptResults(chunk);
+        await persistPromptResults(chunkResults, { replaceSet: index === 0 });
+        allResults.push(...chunkResults);
+        const sortedResults = [...allResults].sort((a, b) => a.fragment_id - b.fragment_id);
+        setGeneratedPrompts(sortedResults);
+        setPromptsProgress({ done: sortedResults.length, total: promptFragments.length });
       }
-      if (!data || typeof data !== "object" || !Array.isArray(data.results)) {
-        setPromptsError("Respuesta inválida");
-        return;
-      }
-      setGeneratedPrompts(data.results as PromptResult[]);
     } catch (e) {
-      setPromptsError(e instanceof Error ? e.message : "Error");
+      const message = e instanceof TypeError && e.message.toLowerCase().includes("fetch")
+        ? "Se perdió la conexión con el servidor durante la generación. Los prompts parciales se conservaron; reintentá para continuar."
+        : e instanceof Error ? e.message : "Error";
+      setPromptsError(message);
     } finally {
       setPromptsLoading(false);
+      setPromptsProgress(null);
     }
   }
 
@@ -579,6 +743,73 @@ export default function VideoEditorPage() {
     () => (generatedScript ?? latestScript?.content ?? "").trim(),
     [generatedScript, latestScript?.content]
   );
+  const promptFragments = useMemo<PromptFragmentRequest[]>(() => {
+    if (!scriptContentForFragments.trim()) return [];
+
+    return splitByMethod(scriptContentForFragments, splitConfig.method, {
+      minWords: splitConfig.strictMinWords,
+      maxWords: splitConfig.strictMaxWords,
+      targetChunks: splitConfig.targetChunks,
+    }).map((fragment) => ({ id: fragment.id, text: fragment.text }));
+  }, [scriptContentForFragments, splitConfig]);
+  const invalidPromptIds = useMemo(() => {
+    const promptMap = new Map(generatedPrompts.map((prompt) => [prompt.fragment_id, prompt.image_prompt]));
+    return new Set(
+      promptFragments
+        .filter((fragment) => isLowQualityGeneratedPrompt(promptMap.get(fragment.id)))
+        .map((fragment) => fragment.id),
+    );
+  }, [generatedPrompts, promptFragments]);
+
+  useEffect(() => {
+    if (
+      !projectId ||
+      !videoId ||
+      !latestScript?.id ||
+      promptFragments.length === 0 ||
+      promptsLoading ||
+      regeneratingPromptIds.size > 0
+    ) {
+      return;
+    }
+
+    const controller = new AbortController();
+    const params = new URLSearchParams({
+      scriptId: latestScript.id,
+      splitConfig: JSON.stringify(splitConfig),
+    });
+    if (imageStyle.trim()) {
+      params.set("style", imageStyle.trim());
+    }
+
+    fetch(`/api/projects/${projectId}/videos/${videoId}/prompts?${params.toString()}`, {
+      signal: controller.signal,
+    })
+      .then((response) => response.json())
+      .then((data) => {
+        if (controller.signal.aborted) return;
+        if (data?.promptSet?.style && !imageStyle.trim()) {
+          setImageStyle(data.promptSet.style);
+        }
+        setGeneratedPrompts(Array.isArray(data?.results) ? data.results as PromptResult[] : []);
+      })
+      .catch((error) => {
+        if ((error as Error).name !== "AbortError") {
+          console.warn("No se pudieron cargar prompts persistidos:", error);
+        }
+      });
+
+    return () => controller.abort();
+  }, [
+    projectId,
+    videoId,
+    latestScript?.id,
+    promptFragments.length,
+    splitConfig,
+    imageStyle,
+    promptsLoading,
+    regeneratingPromptIds.size,
+  ]);
   const allScriptModels = aiModels.length
     ? aiModels
     : AI_MODELS.map((m) => ({
@@ -959,6 +1190,11 @@ export default function VideoEditorPage() {
                     {promptsError && (
                       <p className="text-sm text-red-600 dark:text-red-400">{promptsError}</p>
                     )}
+                    {promptsProgress && (
+                      <p className="text-sm text-[rgb(var(--text-secondary))]">
+                        Generando prompts {promptsProgress.done}/{promptsProgress.total}
+                      </p>
+                    )}
                     <button
                       type="button"
                       onClick={handleGeneratePrompts}
@@ -972,6 +1208,17 @@ export default function VideoEditorPage() {
                       )}
                       Generar prompts
                     </button>
+                    {generatedPrompts.length > 0 && invalidPromptIds.size > 0 && (
+                      <button
+                        type="button"
+                        onClick={handleRegenerateProblemPrompts}
+                        disabled={promptsLoading || regeneratingPromptIds.size > 0}
+                        className="rounded-lg border border-[rgb(var(--border))] px-4 py-2.5 text-[rgb(var(--text-primary))] font-medium hover:bg-[rgb(var(--bg-muted))] disabled:opacity-50 flex items-center gap-2"
+                      >
+                        {regeneratingPromptIds.size > 0 && <Loader2 className="h-4 w-4 animate-spin" />}
+                        Regenerar faltantes/problemáticos ({invalidPromptIds.size})
+                      </button>
+                    )}
                   </div>
 
                   <h3 className="text-sm font-medium text-[rgb(var(--text-primary))] mb-2">
@@ -990,6 +1237,9 @@ export default function VideoEditorPage() {
                       splitConfig={splitConfig}
                       prompts={generatedPrompts}
                       onPromptChange={handlePromptChange}
+                      onRegeneratePrompt={(fragmentId) => regeneratePromptFragments([fragmentId])}
+                      regeneratingPromptIds={regeneratingPromptIds}
+                      invalidPromptIds={invalidPromptIds}
                     />
                   </div>
 

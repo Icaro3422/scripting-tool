@@ -9,7 +9,7 @@ import { type PromptResult } from "@/lib/text-processing";
 // Configuration
 // ============================================================================
 
-const model = process.env.GROQ_MODEL ?? "llama3-8b-8192";
+const model = process.env.GROQ_MODEL ?? "llama-3.1-8b-instant";
 const maxBatchSize = Number.isFinite(Number(process.env.GROQ_BATCH_SIZE))
   ? Number(process.env.GROQ_BATCH_SIZE)
   : 8;
@@ -84,6 +84,11 @@ const responseItemSchema = z.object({
   image_prompt: z.string().min(1),
 });
 
+type PromptFragment = {
+  id: number;
+  text: string;
+};
+
 // ============================================================================
 // Groq Client Singleton
 // ============================================================================
@@ -121,6 +126,8 @@ function buildSystemPrompt(style: string): string {
     "Keep the meaning of the original text, but optimize for visual generation.",
     "Return ONLY valid raw JSON array and nothing else.",
     "Do not include markdown code fences.",
+    'Every object must use exactly these keys: "fragment_id", "original_text", "image_prompt". Never use "image_prompt:" or aliases.',
+    "Even when there is only one input fragment, return an array with one object.",
     'Expected format: [{"fragment_id":1,"original_text":"...","image_prompt":"..."}]',
     'IMPORTANT: The "fragment_id" in your output JSON MUST exactly match the "id" provided in each input fragment. Do not change, reorder, or invent IDs.',
   ].join(" ");
@@ -131,6 +138,15 @@ function extractFirstJsonArray(input: string): string {
   const end = input.lastIndexOf("]");
   if (start === -1 || end === -1 || end < start) {
     throw new Error("No JSON array found in model output");
+  }
+  return input.slice(start, end + 1);
+}
+
+function extractFirstJsonObject(input: string): string {
+  const start = input.indexOf("{");
+  const end = input.lastIndexOf("}");
+  if (start === -1 || end === -1 || end < start) {
+    throw new Error("No JSON object found in model output");
   }
   return input.slice(start, end + 1);
 }
@@ -174,28 +190,142 @@ function repairJson(input: string): string {
   return fixed.trim();
 }
 
-function parseModelJson(rawText: string): PromptResult[] {
+function normalizeObjectKeys(value: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(value).map(([key, fieldValue]) => [
+      key.trim().replace(/:+$/g, "").replace(/\s+/g, "_").toLowerCase(),
+      fieldValue,
+    ]),
+  );
+}
+
+function firstDefined(record: Record<string, unknown>, keys: string[]): unknown {
+  for (const key of keys) {
+    if (record[key] !== undefined && record[key] !== null) {
+      return record[key];
+    }
+  }
+  return undefined;
+}
+
+function toPositiveInt(value: unknown): number | null {
+  if (typeof value === "number" && Number.isInteger(value) && value > 0) {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    const parsed = Number(value.trim());
+    if (Number.isInteger(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+
+  return null;
+}
+
+function toNonEmptyString(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function isLowQualityImagePrompt(value: string): boolean {
+  const trimmed = value.trim();
+  const withoutJsonPunctuation = trimmed.replace(/[\s{}\[\]"',.:;]+/g, "");
+
+  return (
+    trimmed.length < 24 ||
+    withoutJsonPunctuation.length < 12 ||
+    !/[a-zA-Z]/.test(trimmed) ||
+    /^[\s{}\[\]"',.:;\\/-]+$/.test(trimmed)
+  );
+}
+
+function unwrapModelPayload(parsed: unknown): unknown[] {
+  if (Array.isArray(parsed)) {
+    return parsed;
+  }
+
+  if (typeof parsed === "object" && parsed !== null) {
+    const normalized = normalizeObjectKeys(parsed as Record<string, unknown>);
+    for (const key of ["results", "prompts", "items", "data", "response"]) {
+      const value = normalized[key];
+      if (Array.isArray(value)) {
+        return value;
+      }
+    }
+  }
+
+  return [parsed];
+}
+
+function normalizePromptResult(
+  item: unknown,
+  expectedFragments: PromptFragment[],
+): PromptResult {
+  if (typeof item !== "object" || item === null || Array.isArray(item)) {
+    throw new Error("Model item is not a JSON object");
+  }
+
+  const expectedById = new Map(expectedFragments.map((fragment) => [fragment.id, fragment]));
+  const singleExpected = expectedFragments.length === 1 ? expectedFragments[0] : null;
+  const normalized = normalizeObjectKeys(item as Record<string, unknown>);
+
+  const fragmentId =
+    toPositiveInt(firstDefined(normalized, ["fragment_id", "fragmentid", "id", "fragment", "fragment_index", "fragmentindex", "index"])) ??
+    singleExpected?.id;
+  const expectedFragment = fragmentId ? expectedById.get(fragmentId) : singleExpected;
+
+  const originalText = expectedFragment?.text ??
+    toNonEmptyString(firstDefined(normalized, ["original_text", "originaltext", "text", "source_text", "sourcetext", "input_text", "inputtext"]));
+  const imagePrompt = toNonEmptyString(
+    firstDefined(normalized, ["image_prompt", "imageprompt", "prompt", "visual_prompt", "visualprompt", "image", "description"]),
+  );
+
+  if (imagePrompt && isLowQualityImagePrompt(imagePrompt)) {
+    throw new Error(`image_prompt inválido para fragment_id ${fragmentId ?? "desconocido"}: ${JSON.stringify(imagePrompt)}`);
+  }
+
+  return responseItemSchema.parse({
+    fragment_id: fragmentId,
+    original_text: originalText,
+    image_prompt: imagePrompt,
+  });
+}
+
+function parseModelJson(rawText: string, expectedFragments: PromptFragment[] = []): PromptResult[] {
   const trimmed = rawText.trim();
 
   // Try multiple extraction strategies
-  const candidates: string[] = [];
+  const candidates = new Set<string>();
 
   // Strategy 1: Extract first JSON array
   try {
     const extracted = extractFirstJsonArray(trimmed);
-    candidates.push(extracted);
+    candidates.add(extracted);
   } catch {
     // Ignore
   }
 
-  // Strategy 2: Try the whole trimmed text
-  candidates.push(trimmed);
+  // Strategy 2: Extract first JSON object
+  try {
+    const extracted = extractFirstJsonObject(trimmed);
+    candidates.add(extracted);
+  } catch {
+    // Ignore
+  }
 
-  // Strategy 3: Try to find JSON array with regex (handles extra text)
+  // Strategy 3: Try the whole trimmed text
+  candidates.add(trimmed);
+
+  // Strategy 4: Try to find JSON array with regex (handles extra text)
   // Using [\s\S] to match any character including newlines (no /s flag needed)
   const arrayMatch = trimmed.match(/\[[\s\S]*\]/);
   if (arrayMatch) {
-    candidates.push(arrayMatch[0]);
+    candidates.add(arrayMatch[0]);
   }
 
   // Try parsing each candidate, with repair fallback
@@ -204,13 +334,13 @@ function parseModelJson(rawText: string): PromptResult[] {
     // Try direct parse
     try {
       const parsed = JSON.parse(candidate) as unknown;
-      return z.array(responseItemSchema).parse(parsed);
+      return unwrapModelPayload(parsed).map((item) => normalizePromptResult(item, expectedFragments));
     } catch {
       // Try repaired version
       try {
         const repaired = repairJson(candidate);
         const parsed = JSON.parse(repaired) as unknown;
-        return z.array(responseItemSchema).parse(parsed);
+        return unwrapModelPayload(parsed).map((item) => normalizePromptResult(item, expectedFragments));
       } catch (e) {
         errors.push(e instanceof Error ? e.message : String(e));
       }
@@ -296,7 +426,7 @@ function extractOpenRouterContent(payload: unknown): string {
 async function requestGroqBatch(
   groq: Groq,
   systemPrompt: string,
-  batch: { id: number; text: string }[]
+  batch: PromptFragment[]
 ): Promise<PromptResult[]> {
   const completion = await groq.chat.completions.create({
     model,
@@ -309,12 +439,12 @@ async function requestGroqBatch(
   });
 
   const rawOutput = completion.choices[0]?.message?.content ?? "";
-  return parseModelJson(rawOutput);
+  return parseModelJson(rawOutput, batch);
 }
 
 async function requestOpenRouterBatch(
   systemPrompt: string,
-  batch: { id: number; text: string }[]
+  batch: PromptFragment[]
 ): Promise<PromptResult[]> {
   if (!process.env.OPENROUTER_API_KEY) {
     throw new Error("OPENROUTER_API_KEY is missing");
@@ -350,12 +480,12 @@ async function requestOpenRouterBatch(
     console.error("[prompt-generation] OpenRouter returned empty content. Payload:", JSON.stringify(payload).slice(0, 500));
     throw new Error("OpenRouter devolvió una respuesta vacía");
   }
-  return parseModelJson(rawOutput);
+  return parseModelJson(rawOutput, batch);
 }
 
 async function requestGoogleBatch(
   systemPrompt: string,
-  batch: { id: number; text: string }[]
+  batch: PromptFragment[]
 ): Promise<PromptResult[]> {
   if (!googleApiKey) {
     throw new Error("GOOGLE_API_KEY is missing");
@@ -393,7 +523,7 @@ async function requestGoogleBatch(
     console.error("[prompt-generation] Google AI returned empty content. Payload:", JSON.stringify(payload).slice(0, 500));
     throw new Error("Google AI devolvió una respuesta vacía");
   }
-  return parseModelJson(text);
+  return parseModelJson(text, batch);
 }
 
 function extractGoogleContent(payload: unknown): string {
@@ -409,20 +539,31 @@ function extractGoogleContent(payload: unknown): string {
 
 async function requestOllamaBatch(
   systemPrompt: string,
-  batch: { id: number; text: string }[]
+  batch: PromptFragment[]
 ): Promise<PromptResult[]> {
+  // Ollama tends to be more reliable with one fragment per request.
+  if (batch.length > 1) {
+    const results: PromptResult[] = [];
+    for (const fragment of batch) {
+      const single = await requestOllamaBatch(systemPrompt, [fragment]);
+      results.push(...single);
+    }
+    return results;
+  }
+
   const response = await fetch(`${ollamaBaseUrl}/api/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       model: ollamaModel,
+      format: "json",
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: JSON.stringify(batch) },
       ],
       stream: false,
       options: {
-        temperature: 0.5,
+        temperature: 0.2,
         num_predict: 4096,
       },
     }),
@@ -440,7 +581,7 @@ async function requestOllamaBatch(
     console.error("[prompt-generation] Ollama returned empty content. Payload:", JSON.stringify(payload).slice(0, 500));
     throw new Error("Ollama devolvió una respuesta vacía");
   }
-  return parseModelJson(rawOutput);
+  return parseModelJson(rawOutput, batch);
 }
 
 function extractOllamaContent(payload: unknown): string {
@@ -451,6 +592,41 @@ function extractOllamaContent(payload: unknown): string {
   return "";
 }
 
+function summarizeProviderError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function getRetryDelayMs(error: unknown, retryCount: number): number | null {
+  const message = summarizeProviderError(error).toLowerCase();
+  if (message.includes("quota exceeded") || message.includes("limit: 0")) {
+    return null;
+  }
+
+  const retryMatch = message.match(/retry in ([\d.]+)s/);
+  if (retryMatch) {
+    return Math.min(parseFloat(retryMatch[1]) * 1000, 30000);
+  }
+
+  if (message.includes("rate") || message.includes("too many requests") || message.includes("429")) {
+    return Math.min(1000 * Math.pow(2, retryCount), 15000);
+  }
+
+  return null;
+}
+
+function selectFragmentResult(provider: string, fragment: PromptFragment, results: PromptResult[]): PromptResult {
+  const matches = results.filter((result) => result.fragment_id === fragment.id);
+  if (matches.length === 1) {
+    return matches[0];
+  }
+
+  if (matches.length > 1) {
+    throw new Error(`${provider} devolvió fragment_id ${fragment.id} ${matches.length} veces`);
+  }
+
+  throw new Error(`${provider} no devolvió fragment_id ${fragment.id}`);
+}
+
 // ============================================================================
 // API Handler
 // ============================================================================
@@ -458,6 +634,7 @@ function extractOllamaContent(payload: unknown): string {
 export async function POST(request: Request): Promise<Response> {
   const hasGroq = Boolean(process.env.GROQ_API_KEY);
   const hasOpenRouter = Boolean(process.env.OPENROUTER_API_KEY);
+  const hasOllama = Boolean(process.env.OLLAMA_BASE_URL || ollamaBaseUrl);
 
   // Auth check
   const { userId } = await auth();
@@ -466,10 +643,10 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   const hasGoogle = !!googleApiKey;
-  if (!hasGroq && !hasOpenRouter && !hasGoogle) {
+  if (!hasGroq && !hasOpenRouter && !hasGoogle && !hasOllama) {
     console.error("[prompt-generation] No LLM provider configured");
     return NextResponse.json(
-      { error: "Error del servidor: configuración incompleta. Se requiere GROQ_API_KEY, OPENROUTER_API_KEY, o GOOGLE_API_KEY" },
+      { error: "Error del servidor: configuración incompleta. Se requiere GROQ_API_KEY, OPENROUTER_API_KEY, GOOGLE_API_KEY, u OLLAMA_BASE_URL" },
       { status: 500 }
     );
   }
@@ -489,57 +666,72 @@ export async function POST(request: Request): Promise<Response> {
   const groq = groqClient ?? (hasGroq ? new Groq({ apiKey: process.env.GROQ_API_KEY }) : null);
   const systemPrompt = buildSystemPrompt(parsedBody.data.style);
 
-  const hasOllama = Boolean(process.env.OLLAMA_BASE_URL || ollamaBaseUrl);
+  async function requestFragmentWithFallback(fragment: PromptFragment): Promise<PromptResult> {
+    const batch = [fragment];
+    const providerErrors: string[] = [];
 
-  // Provider priority: Groq > Ollama (local) > Google AI > OpenRouter (free)
-  async function requestWithFallback(batch: { id: number; text: string }[], retryCount = 0): Promise<PromptResult[]> {
-    // Try Groq first (fastest, free)
-    if (groq) {
-      try {
-        return await requestGroqBatch(groq, systemPrompt, batch);
-      } catch (groqError) {
-        console.warn("[prompt-generation] Groq failed:", groqError);
-      }
-    }
-
-    // Try Ollama (local, completely free, no limits)
     if (hasOllama) {
       try {
-        return await requestOllamaBatch(systemPrompt, batch);
+        const results = await requestOllamaBatch(systemPrompt, batch);
+        return selectFragmentResult("Ollama", fragment, results);
       } catch (ollamaError) {
         console.warn("[prompt-generation] Ollama failed:", ollamaError);
+        providerErrors.push(`Ollama: ${summarizeProviderError(ollamaError)}`);
       }
     }
 
-    // Try Google AI Studio (free, 1M context)
-    if (hasGoogle) {
+    if (groq) {
       try {
-        return await requestGoogleBatch(systemPrompt, batch);
-      } catch (googleError) {
-        // Retry on rate limit with exponential backoff
-        if (googleError instanceof Error && googleError.message.includes("retry")) {
-          const retryMatch = googleError.message.match(/retry in ([\d.]+)s/);
-          const retrySeconds = retryMatch ? parseFloat(retryMatch[1]) * 1000 : Math.min(1000 * Math.pow(2, retryCount), 30000);
-          console.warn(`[prompt-generation] Rate limited, retrying in ${retrySeconds}ms (attempt ${retryCount + 1})`);
-          if (retryCount < 3) {
-            await new Promise(resolve => setTimeout(resolve, retrySeconds));
-            return requestWithFallback(batch, retryCount + 1);
-          }
-        }
-        console.warn("[prompt-generation] Google AI failed:", googleError);
+        const results = await requestGroqBatch(groq, systemPrompt, batch);
+        return selectFragmentResult("Groq", fragment, results);
+      } catch (groqError) {
+        console.warn("[prompt-generation] Groq failed:", groqError);
+        providerErrors.push(`Groq: ${summarizeProviderError(groqError)}`);
       }
     }
 
-    // Try OpenRouter (with free model)
+    if (hasGoogle) {
+      for (let retryCount = 0; retryCount <= 2; retryCount++) {
+        try {
+          const results = await requestGoogleBatch(systemPrompt, batch);
+          return selectFragmentResult("Google AI", fragment, results);
+        } catch (googleError) {
+          const retryDelayMs = getRetryDelayMs(googleError, retryCount);
+          if (retryDelayMs !== null && retryCount < 2) {
+            console.warn(`[prompt-generation] Google AI rate limited, retrying in ${retryDelayMs}ms (attempt ${retryCount + 1})`);
+            await new Promise(resolve => setTimeout(resolve, retryDelayMs));
+            continue;
+          }
+
+          console.warn("[prompt-generation] Google AI failed:", googleError);
+          providerErrors.push(`Google AI: ${summarizeProviderError(googleError)}`);
+          break;
+        }
+      }
+    }
+
     if (hasOpenRouter) {
       try {
-        return await requestOpenRouterBatch(systemPrompt, batch);
+        const results = await requestOpenRouterBatch(systemPrompt, batch);
+        return selectFragmentResult("OpenRouter", fragment, results);
       } catch (orError) {
         console.warn("[prompt-generation] OpenRouter failed:", orError);
+        providerErrors.push(`OpenRouter: ${summarizeProviderError(orError)}`);
       }
     }
 
-    throw new Error("Todos los proveedores fallaron. Configurá GROQ_API_KEY (Groq), instalá Ollama localmente, o verificá las otras API keys.");
+    const details = providerErrors.length > 0 ? ` Último detalle: ${providerErrors.at(-1)}` : "";
+    throw new Error(`Todos los proveedores fallaron para el fragmento ${fragment.id}.${details}`);
+  }
+
+  // Provider priority per fragment: Ollama (local) > Groq > Google AI > OpenRouter (free)
+  async function requestWithFallback(batch: PromptFragment[]): Promise<PromptResult[]> {
+    const results: PromptResult[] = [];
+    for (const fragment of batch) {
+      console.log(`[prompt-generation] Processing fragment ${fragment.id}`);
+      results.push(await requestFragmentWithFallback(fragment));
+    }
+    return results;
   }
 
   try {
