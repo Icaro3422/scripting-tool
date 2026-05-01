@@ -5,6 +5,8 @@ import { z } from "zod";
 
 import { prisma } from "@/lib/db";
 
+const maxPromptResultsPerWrite = 50;
+
 const splitConfigSchema = z.object({
   method: z.string().min(1),
   targetChunks: z.number().int().positive().optional(),
@@ -20,13 +22,14 @@ const promptResultSchema = z.object({
 
 const identitySchema = z.object({
   scriptId: z.string().min(1),
+  scriptContentHash: z.string().regex(/^[a-f0-9]{64}$/i),
   style: z.string().min(1).max(500),
   splitConfig: splitConfigSchema,
   fragmentCount: z.number().int().positive(),
 });
 
 const upsertSchema = identitySchema.extend({
-  results: z.array(promptResultSchema).min(1),
+  results: z.array(promptResultSchema).min(1).max(maxPromptResultsPerWrite),
   source: z.string().max(50).optional().default("ai"),
   replaceSet: z.boolean().optional().default(false),
 });
@@ -73,6 +76,47 @@ function buildIdentity(input: z.infer<typeof identitySchema>) {
   };
 }
 
+function validatePromptResults(results: z.infer<typeof promptResultSchema>[], fragmentCount: number) {
+  const ids = new Set<number>();
+  for (const result of results) {
+    if (result.fragment_id > fragmentCount) {
+      throw new z.ZodError([
+        {
+          code: z.ZodIssueCode.custom,
+          path: ["results"],
+          message: `fragment_id ${result.fragment_id} excede fragmentCount ${fragmentCount}`,
+        },
+      ]);
+    }
+    if (ids.has(result.fragment_id)) {
+      throw new z.ZodError([
+        {
+          code: z.ZodIssueCode.custom,
+          path: ["results"],
+          message: `fragment_id duplicado: ${result.fragment_id}`,
+        },
+      ]);
+    }
+    ids.add(result.fragment_id);
+  }
+}
+
+function errorResponse(error: unknown, fallback: string) {
+  if (error instanceof z.ZodError) {
+    return NextResponse.json(
+      { error: "Solicitud inválida", details: error.flatten() },
+      { status: 400 },
+    );
+  }
+
+  if (error instanceof SyntaxError) {
+    return NextResponse.json({ error: "JSON inválido" }, { status: 400 });
+  }
+
+  console.error(`[prompt-persistence] ${fallback}:`, error);
+  return NextResponse.json({ error: fallback }, { status: 500 });
+}
+
 async function getUserVideo(
   projectId: string,
   videoId: string,
@@ -106,7 +150,8 @@ async function assertScriptForVideo(scriptId: string, videoId: string, userId: s
 
 function serializePromptSet(promptSet: {
   id: string;
-  scriptId: string | null;
+  scriptId: string;
+  scriptContentHash: string;
   style: string;
   splitConfig: unknown;
   fragmentCount: number;
@@ -124,6 +169,7 @@ function serializePromptSet(promptSet: {
     promptSet: {
       id: promptSet.id,
       scriptId: promptSet.scriptId,
+      scriptContentHash: promptSet.scriptContentHash,
       style: promptSet.style,
       splitConfig: promptSet.splitConfig,
       fragmentCount: promptSet.fragmentCount,
@@ -157,29 +203,35 @@ export async function GET(
 
     const searchParams = req.nextUrl.searchParams;
     const scriptId = searchParams.get("scriptId");
+    const scriptContentHash = searchParams.get("scriptContentHash");
     const splitConfigRaw = searchParams.get("splitConfig");
     const styleRaw = searchParams.get("style");
 
-    if (!scriptId || !splitConfigRaw) {
-      return NextResponse.json({ promptSet: null, results: [] });
+    if (!scriptId || !scriptContentHash || !splitConfigRaw || !styleRaw?.trim()) {
+      return NextResponse.json(
+        { error: "scriptId, scriptContentHash, splitConfig y style son requeridos" },
+        { status: 400 },
+      );
     }
 
     const splitConfig = splitConfigSchema.parse(JSON.parse(splitConfigRaw));
+    const validatedHash = z.string().regex(/^[a-f0-9]{64}$/i).parse(scriptContentHash);
     const script = await assertScriptForVideo(scriptId, video.id, user.id);
     if (!script) return NextResponse.json({ error: "Script no encontrado" }, { status: 404 });
 
     const splitConfigHash = hash(stableStringify(splitConfig));
-    const where = {
-      userId: user.id,
-      videoId: video.id,
-      scriptId,
-      splitConfigHash,
-      ...(styleRaw?.trim() ? { styleHash: hash(normalizeStyle(styleRaw).toLowerCase()) } : {}),
-    };
+    const styleHash = hash(normalizeStyle(styleRaw).toLowerCase());
 
-    const promptSet = await prisma.imagePromptSet.findFirst({
-      where,
-      orderBy: { updatedAt: "desc" },
+    const promptSet = await prisma.imagePromptSet.findUnique({
+      where: {
+        image_prompt_set_identity: {
+          videoId: video.id,
+          scriptId,
+          scriptContentHash: validatedHash,
+          styleHash,
+          splitConfigHash,
+        },
+      },
       include: { prompts: true },
     });
 
@@ -189,8 +241,7 @@ export async function GET(
 
     return NextResponse.json(serializePromptSet(promptSet));
   } catch (error) {
-    console.error("[prompt-persistence] GET failed:", error);
-    return NextResponse.json({ error: "Error al cargar prompts persistidos" }, { status: 500 });
+    return errorResponse(error, "Error al cargar prompts persistidos");
   }
 }
 
@@ -208,44 +259,47 @@ export async function POST(
     if (!video) return NextResponse.json({ error: "Video no encontrado" }, { status: 404 });
 
     const parsed = upsertSchema.parse(await req.json());
+    validatePromptResults(parsed.results, parsed.fragmentCount);
     const script = await assertScriptForVideo(parsed.scriptId, video.id, user.id);
     if (!script) return NextResponse.json({ error: "Script no encontrado" }, { status: 404 });
 
     const identity = buildIdentity(parsed);
-    const promptSet = await prisma.imagePromptSet.upsert({
-      where: {
-        image_prompt_set_identity: {
+    const saved = await prisma.$transaction(async (tx) => {
+      const promptSet = await tx.imagePromptSet.upsert({
+        where: {
+          image_prompt_set_identity: {
+            videoId: video.id,
+            scriptId: parsed.scriptId,
+            scriptContentHash: identity.scriptContentHash,
+            styleHash: identity.styleHash,
+            splitConfigHash: identity.splitConfigHash,
+          },
+        },
+        create: {
+          userId: user.id,
           videoId: video.id,
           scriptId: parsed.scriptId,
+          scriptContentHash: identity.scriptContentHash,
+          style: identity.style,
           styleHash: identity.styleHash,
+          splitConfig: identity.splitConfig,
           splitConfigHash: identity.splitConfigHash,
+          fragmentCount: parsed.fragmentCount,
         },
-      },
-      create: {
-        userId: user.id,
-        videoId: video.id,
-        scriptId: parsed.scriptId,
-        style: identity.style,
-        styleHash: identity.styleHash,
-        splitConfig: identity.splitConfig,
-        splitConfigHash: identity.splitConfigHash,
-        fragmentCount: parsed.fragmentCount,
-      },
-      update: {
-        style: identity.style,
-        splitConfig: identity.splitConfig,
-        fragmentCount: parsed.fragmentCount,
-        isActive: true,
-      },
-    });
+        update: {
+          style: identity.style,
+          splitConfig: identity.splitConfig,
+          fragmentCount: parsed.fragmentCount,
+          isActive: true,
+        },
+      });
 
-    if (parsed.replaceSet) {
-      await prisma.imagePrompt.deleteMany({ where: { promptSetId: promptSet.id } });
-    }
+      if (parsed.replaceSet) {
+        await tx.imagePrompt.deleteMany({ where: { promptSetId: promptSet.id } });
+      }
 
-    await prisma.$transaction(
-      parsed.results.map((result) =>
-        prisma.imagePrompt.upsert({
+      for (const result of parsed.results) {
+        await tx.imagePrompt.upsert({
           where: {
             promptSetId_fragmentId: {
               promptSetId: promptSet.id,
@@ -267,19 +321,18 @@ export async function POST(
             source: parsed.source,
             status: parsed.source === "manual" ? "edited" : "generated",
           },
-        }),
-      ),
-    );
+        });
+      }
 
-    const saved = await prisma.imagePromptSet.findUnique({
-      where: { id: promptSet.id },
-      include: { prompts: true },
+      return tx.imagePromptSet.findUnique({
+        where: { id: promptSet.id },
+        include: { prompts: true },
+      });
     });
 
     return NextResponse.json(saved ? serializePromptSet(saved) : { promptSet: null, results: [] });
   } catch (error) {
-    console.error("[prompt-persistence] POST failed:", error);
-    return NextResponse.json({ error: "Error al guardar prompts persistidos" }, { status: 500 });
+    return errorResponse(error, "Error al guardar prompts persistidos");
   }
 }
 
@@ -297,6 +350,15 @@ export async function PATCH(
     if (!video) return NextResponse.json({ error: "Video no encontrado" }, { status: 404 });
 
     const parsed = patchSchema.parse(await req.json());
+    if (parsed.fragmentId > parsed.fragmentCount) {
+      throw new z.ZodError([
+        {
+          code: z.ZodIssueCode.custom,
+          path: ["fragmentId"],
+          message: `fragmentId ${parsed.fragmentId} excede fragmentCount ${parsed.fragmentCount}`,
+        },
+      ]);
+    }
     const script = await assertScriptForVideo(parsed.scriptId, video.id, user.id);
     if (!script) return NextResponse.json({ error: "Script no encontrado" }, { status: 404 });
 
@@ -306,6 +368,7 @@ export async function PATCH(
         image_prompt_set_identity: {
           videoId: video.id,
           scriptId: parsed.scriptId,
+          scriptContentHash: identity.scriptContentHash,
           styleHash: identity.styleHash,
           splitConfigHash: identity.splitConfigHash,
         },
@@ -314,6 +377,7 @@ export async function PATCH(
         userId: user.id,
         videoId: video.id,
         scriptId: parsed.scriptId,
+        scriptContentHash: identity.scriptContentHash,
         style: identity.style,
         styleHash: identity.styleHash,
         splitConfig: identity.splitConfig,
@@ -363,7 +427,6 @@ export async function PATCH(
       },
     });
   } catch (error) {
-    console.error("[prompt-persistence] PATCH failed:", error);
-    return NextResponse.json({ error: "Error al editar prompt persistido" }, { status: 500 });
+    return errorResponse(error, "Error al editar prompt persistido");
   }
 }

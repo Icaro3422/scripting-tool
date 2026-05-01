@@ -3,6 +3,8 @@ import { auth } from "@clerk/nextjs/server";
 import Groq from "groq-sdk";
 import { z } from "zod";
 
+import { recordUsageAndDeduct } from "@/lib/billing";
+import { prisma } from "@/lib/db";
 import { type PromptResult } from "@/lib/text-processing";
 
 // ============================================================================
@@ -21,7 +23,7 @@ const openRouterSiteUrl = process.env.OPENROUTER_SITE_URL ?? process.env.NEXT_PU
 const openRouterAppName = process.env.OPENROUTER_APP_NAME ?? "Scripting Tool";
 
 // Google AI Studio: Completely free, no credit card required, 1M context
-const googleApiKey = process.env.GOOGLE_API_KEY ?? "";
+const googleApiKey = process.env.GOOGLE_AI_API_KEY ?? process.env.GOOGLE_API_KEY ?? "";
 const googleModel = process.env.GOOGLE_MODEL ?? "gemini-2.0-flash";
 const googleBaseUrl = "https://generativelanguage.googleapis.com/v1beta/models";
 
@@ -242,6 +244,10 @@ function isLowQualityImagePrompt(value: string): boolean {
     !/[a-zA-Z]/.test(trimmed) ||
     /^[\s{}\[\]"',.:;\\/-]+$/.test(trimmed)
   );
+}
+
+function estimateTokensFromText(value: string): number {
+  return Math.max(1, Math.ceil(value.length / 4));
 }
 
 function unwrapModelPayload(parsed: unknown): unknown[] {
@@ -488,14 +494,17 @@ async function requestGoogleBatch(
   batch: PromptFragment[]
 ): Promise<PromptResult[]> {
   if (!googleApiKey) {
-    throw new Error("GOOGLE_API_KEY is missing");
+    throw new Error("GOOGLE_AI_API_KEY is missing");
   }
 
-  const url = `${googleBaseUrl}/${googleModel}:generateContent?key=${googleApiKey}`;
+  const url = `${googleBaseUrl}/${googleModel}:generateContent`;
 
   const response = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      "x-goog-api-key": googleApiKey,
+    },
     body: JSON.stringify({
       contents: [
         {
@@ -642,11 +651,17 @@ export async function POST(request: Request): Promise<Response> {
     return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   }
 
+  const user = await prisma.user.upsert({
+    where: { clerkId: userId },
+    update: {},
+    create: { clerkId: userId },
+  });
+
   const hasGoogle = !!googleApiKey;
   if (!hasGroq && !hasOpenRouter && !hasGoogle && !hasOllama) {
     console.error("[prompt-generation] No LLM provider configured");
     return NextResponse.json(
-      { error: "Error del servidor: configuración incompleta. Se requiere GROQ_API_KEY, OPENROUTER_API_KEY, GOOGLE_API_KEY, u OLLAMA_BASE_URL" },
+      { error: "Error del servidor: configuración incompleta. Se requiere GROQ_API_KEY, OPENROUTER_API_KEY, GOOGLE_AI_API_KEY, u OLLAMA_BASE_URL" },
       { status: 500 }
     );
   }
@@ -776,6 +791,29 @@ export async function POST(request: Request): Promise<Response> {
       `[prompt-generation] Success: user=${userId.slice(0, 4)}****, fragments=${results.length}`
     );
 
+    await recordUsageAndDeduct({
+      userId: user.id,
+      operationType: "image-prompt",
+      provider: "prompt-fallback-chain",
+      model: [
+        hasOllama ? ollamaModel : null,
+        groq ? model : null,
+        hasGoogle ? googleModel : null,
+        hasOpenRouter ? openRouterModel : null,
+      ].filter(Boolean).join(" > "),
+      inputTokens: estimateTokensFromText(systemPrompt) +
+        parsedBody.data.fragments.reduce((sum, fragment) => sum + estimateTokensFromText(fragment.text), 0),
+      outputTokens: results.reduce(
+        (sum, result) => sum + estimateTokensFromText(result.image_prompt),
+        0,
+      ),
+      metadata: {
+        fragmentCount: results.length,
+        requestedFragmentCount: parsedBody.data.fragments.length,
+        styleLength: parsedBody.data.style.length,
+      },
+    });
+
     return NextResponse.json({ results }, { status: 200 });
   } catch (error: unknown) {
     // Log the real error server-side for debugging
@@ -783,7 +821,7 @@ export async function POST(request: Request): Promise<Response> {
 
     // Return a generic message to the client — never leak internal details
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Error al generar prompts" },
+      { error: "Error al generar prompts" },
       { status: 500 }
     );
   }

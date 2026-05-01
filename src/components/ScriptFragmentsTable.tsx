@@ -2,7 +2,6 @@
 
 import { useState, useMemo, useEffect } from "react";
 import { splitByMethod, type SplitMethod, type SplitConfigState, type PromptResult } from "@/lib/text-processing";
-import { type FragmentSplitMode } from "@/lib/scriptUtils";
 import { ImageIcon, Copy, Check, Loader2 } from "lucide-react";
 import { LocalThumbnailImage } from "@/components/LocalThumbnailImage";
 import { LOCAL_URL_PREFIX } from "@/lib/client-storage";
@@ -24,7 +23,6 @@ const SCENE_IMAGE_MODELS: SceneImageModel[] = [
 
 interface ScriptFragmentsTableProps {
   scriptContent: string;
-  fragmentSplitMode: FragmentSplitMode;
   sceneImageModelId: string;
   onSceneImageModelChange: (id: string) => void;
   onGenerateScene?: (fragmentIndex: number, text: string) => void;
@@ -37,6 +35,10 @@ interface ScriptFragmentsTableProps {
   splitConfig?: SplitConfigState;
   /** Generated image prompts mapped by fragment_id (1-based) */
   prompts?: PromptResult[];
+  /** Stable identity for resetting local prompt drafts */
+  promptSetKey?: string;
+  /** Whether prompt edits/regenerations can be persisted */
+  promptPersistenceReady?: boolean;
   /** Callback when a prompt is edited inline */
   onPromptChange?: (fragmentId: number, newPrompt: string) => void;
   /** Callback to regenerate a single prompt */
@@ -49,7 +51,6 @@ interface ScriptFragmentsTableProps {
 
 export function ScriptFragmentsTable({
   scriptContent,
-  fragmentSplitMode,
   sceneImageModelId,
   onSceneImageModelChange,
   onGenerateScene,
@@ -58,6 +59,8 @@ export function ScriptFragmentsTable({
   splitMethod = "strict",
   splitConfig,
   prompts,
+  promptSetKey,
+  promptPersistenceReady = true,
   onPromptChange,
   onRegeneratePrompt,
   regeneratingPromptIds = new Set<number>(),
@@ -69,10 +72,10 @@ export function ScriptFragmentsTable({
   // Local editable prompts state
   const [editedPrompts, setEditedPrompts] = useState<Record<number, string>>({});
 
-  // Reset edited prompts when the prompt set changes
+  // Reset edited prompts only when the prompt identity changes.
   useEffect(() => {
     setEditedPrompts({});
-  }, [prompts]);
+  }, [promptSetKey]);
 
   // Build a lookup map for prompts by fragment_id
   const promptMap = useMemo(() => {
@@ -201,6 +204,7 @@ export function ScriptFragmentsTable({
                           value={row.prompt}
                           onChange={(e) => handlePromptEdit(row.index, e.target.value)}
                           onBlur={() => handlePromptBlur(row.index)}
+                          disabled={!promptPersistenceReady}
                           rows={2}
                           className={`w-full rounded-lg border bg-[rgb(var(--bg-muted))] px-2 py-1.5 text-xs text-[rgb(var(--text-primary))] placeholder:text-[rgb(var(--text-muted))] focus:outline-none focus:ring-2 focus:ring-[rgb(var(--accent))] resize-none ${
                             invalidPromptIds.has(row.index) ? "border-red-500" : "border-[rgb(var(--border))]"
@@ -209,6 +213,8 @@ export function ScriptFragmentsTable({
                         <div className="flex items-center justify-between gap-2">
                           {invalidPromptIds.has(row.index) ? (
                             <span className="text-[11px] text-red-600 dark:text-red-400">Revisar prompt</span>
+                          ) : !promptPersistenceReady ? (
+                            <span className="text-[11px] text-amber-600 dark:text-amber-400">Guarda el guion y estilo para editar</span>
                           ) : (
                             <span />
                           )}
@@ -216,7 +222,7 @@ export function ScriptFragmentsTable({
                             <button
                               type="button"
                               onClick={() => onRegeneratePrompt(row.index)}
-                              disabled={regeneratingPromptIds.has(row.index)}
+                              disabled={regeneratingPromptIds.has(row.index) || !promptPersistenceReady}
                               className="rounded px-2 py-1 text-[11px] font-medium border border-[rgb(var(--border))] text-[rgb(var(--text-primary))] hover:bg-[rgb(var(--bg-muted))] disabled:opacity-50"
                             >
                               {regeneratingPromptIds.has(row.index) ? "Regenerando..." : "Regenerar prompt"}
@@ -231,7 +237,7 @@ export function ScriptFragmentsTable({
                           <button
                             type="button"
                             onClick={() => onRegeneratePrompt(row.index)}
-                            disabled={regeneratingPromptIds.has(row.index)}
+                            disabled={regeneratingPromptIds.has(row.index) || !promptPersistenceReady}
                             className="block rounded px-2 py-1 text-[11px] font-medium border border-[rgb(var(--border))] text-[rgb(var(--text-primary))] hover:bg-[rgb(var(--bg-muted))] disabled:opacity-50"
                           >
                             {regeneratingPromptIds.has(row.index) ? "Regenerando..." : "Generar prompt"}

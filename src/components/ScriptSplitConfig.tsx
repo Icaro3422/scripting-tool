@@ -10,6 +10,8 @@ export type { SplitMethod, SplitConfigState };
 interface ScriptSplitConfigProps {
   scriptContent: string;
   onMethodChange?: (method: SplitMethod, config: SplitConfigState) => void;
+  /** Controlled config from parent. */
+  value?: SplitConfigState;
   /**
    * Initial method - only applied on mount.
    * For controlled component, manage state in parent and pass via initialConfig.
@@ -41,14 +43,23 @@ function parseNumberInput(value: string, fallback: number): number {
 export function ScriptSplitConfig({
   scriptContent,
   onMethodChange,
+  value,
   initialMethod,
   initialConfig,
 }: ScriptSplitConfigProps) {
-  const [config, setConfig] = useState<SplitConfigState>({
+  const [internalConfig, setInternalConfig] = useState<SplitConfigState>({
     ...DEFAULT_CONFIG,
     ...initialConfig,
     method: initialMethod ?? initialConfig?.method ?? DEFAULT_CONFIG.method,
   });
+  const config = value ?? internalConfig;
+
+  function updateConfig(newConfig: SplitConfigState) {
+    if (!value) {
+      setInternalConfig(newConfig);
+    }
+    onMethodChange?.(newConfig.method, newConfig);
+  }
 
   const { fragmentCount, wordCount } = useMemo(() => {
     if (!scriptContent.trim()) {
@@ -67,8 +78,7 @@ export function ScriptSplitConfig({
 
   function handleMethodChange(newMethod: SplitMethod) {
     const newConfig = { ...config, method: newMethod };
-    setConfig(newConfig);
-    onMethodChange?.(newMethod, newConfig);
+    updateConfig(newConfig);
   }
 
   type NumericConfigKey = "targetChunks" | "strictMinWords" | "strictMaxWords";
@@ -83,8 +93,7 @@ export function ScriptSplitConfig({
       newConfig.strictMinWords = value;
     }
 
-    setConfig(newConfig);
-    onMethodChange?.(newConfig.method, newConfig);
+    updateConfig(newConfig);
   }
 
   if (!scriptContent.trim()) {
@@ -142,7 +151,7 @@ export function ScriptSplitConfig({
             id="targetChunks"
             type="text"
             inputMode="numeric"
-            defaultValue={config.targetChunks}
+            value={config.targetChunks}
             onChange={(e) => {
               e.target.value = e.target.value.replace(/[^0-9]/g, "");
               const val = e.target.value;
@@ -177,7 +186,7 @@ export function ScriptSplitConfig({
             id="strictMinWords"
             type="text"
             inputMode="numeric"
-            defaultValue={config.strictMinWords}
+            value={config.strictMinWords}
             onChange={(e) => {
               e.target.value = e.target.value.replace(/[^0-9]/g, "");
               const val = e.target.value;
@@ -204,7 +213,7 @@ export function ScriptSplitConfig({
             id="strictMaxWords"
             type="text"
             inputMode="numeric"
-            defaultValue={config.strictMaxWords}
+            value={config.strictMaxWords}
             onChange={(e) => {
               e.target.value = e.target.value.replace(/[^0-9]/g, "");
               const val = e.target.value;

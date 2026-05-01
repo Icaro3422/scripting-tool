@@ -1,7 +1,7 @@
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 
-export type OperationType = "script" | "thumbnail" | "scene-image" | "channel-analyze";
+export type OperationType = "script" | "thumbnail" | "scene-image" | "channel-analyze" | "image-prompt";
 
 const BILLING_ENABLED = process.env.BILLING_ENABLED === "true";
 

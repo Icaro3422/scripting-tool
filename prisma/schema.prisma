@@ -183,8 +183,9 @@ model ImagePromptSet {
   user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
   videoId         String
   video           Video         @relation(fields: [videoId], references: [id], onDelete: Cascade)
-  scriptId        String?
-  script          Script?       @relation(fields: [scriptId], references: [id], onDelete: Cascade)
+  scriptId        String
+  script          Script        @relation(fields: [scriptId], references: [id], onDelete: Cascade)
+  scriptContentHash String
   style           String        @db.Text
   styleHash       String
   splitConfig     Json
@@ -195,7 +196,7 @@ model ImagePromptSet {
   updatedAt       DateTime      @updatedAt
   prompts         ImagePrompt[]
 
-  @@unique([videoId, scriptId, styleHash, splitConfigHash], name: "image_prompt_set_identity")
+  @@unique([videoId, scriptId, scriptContentHash, styleHash, splitConfigHash], name: "image_prompt_set_identity")
   @@index([userId, videoId])
   @@index([scriptId])
 }
