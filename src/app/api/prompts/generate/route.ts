@@ -157,6 +157,7 @@ function extractFirstJsonObject(input: string): string {
  * Attempts to repair common JSON issues from LLM output:
  * - Strips markdown code blocks (```json ... ```)
  * - Removes trailing commas before } or ]
+ * - Repairs quoted keys that accidentally include the colon inside the key
  * - Attempts to close truncated strings and arrays
  */
 function repairJson(input: string): string {
@@ -164,6 +165,9 @@ function repairJson(input: string): string {
 
   // Strip markdown code blocks if present
   fixed = fixed.replace(/^```(?:json)?\s*\n?/i, "").replace(/```\s*$/, "");
+
+  // Common LLM typo: {"image_prompt:"...} instead of {"image_prompt": "..."}
+  fixed = fixed.replace(/"([A-Za-z_][A-Za-z0-9_]*):"\s*(?=[[{"])/g, '"$1":');
 
   // Remove trailing commas before } or ]
   fixed = fixed.replace(/,\s*([}\]])/g, "$1");
