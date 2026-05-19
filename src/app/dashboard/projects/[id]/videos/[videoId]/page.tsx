@@ -51,6 +51,17 @@ type PromptFragmentRequest = {
   text: string;
 };
 
+type GenerationProgressState = {
+  label: string;
+  detail: string;
+  startedAt: number;
+  done?: number;
+  total?: number;
+  batch?: number;
+  batches?: number;
+  percent?: number;
+};
+
 type PromptPersistenceIdentity = {
   scriptId: string;
   scriptContentHash: string;
@@ -78,6 +89,64 @@ function isLowQualityGeneratedPrompt(value: string | undefined): boolean {
     withoutJsonPunctuation.length < 12 ||
     !/[a-zA-Z]/.test(trimmed) ||
     /^[\s{}\[\]"',.:;\\/-]+$/.test(trimmed)
+  );
+}
+
+function formatElapsed(ms: number): string {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return minutes > 0 ? `${minutes}:${seconds.toString().padStart(2, "0")}` : `${seconds}s`;
+}
+
+function estimateActivePercent(progress: GenerationProgressState, nowMs: number): number {
+  if (typeof progress.percent === "number") {
+    return Math.min(100, Math.max(0, progress.percent));
+  }
+
+  if (progress.total && progress.total > 0 && progress.done != null) {
+    const percent = Math.round((progress.done / progress.total) * 100);
+    return Math.min(98, Math.max(8, percent));
+  }
+
+  const elapsedSeconds = Math.max(0, (nowMs - progress.startedAt) / 1000);
+  return Math.min(94, 12 + elapsedSeconds * 3);
+}
+
+function GenerationProgressCard({
+  progress,
+  nowMs,
+}: {
+  progress: GenerationProgressState;
+  nowMs: number;
+}) {
+  const percent = estimateActivePercent(progress, nowMs);
+  const elapsed = formatElapsed(nowMs - progress.startedAt);
+
+  return (
+    <div className="rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--bg-muted))] p-3 space-y-2">
+      <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+        <span className="font-medium text-[rgb(var(--text-primary))]">{progress.label}</span>
+        <span className="text-xs text-[rgb(var(--text-muted))]">Tiempo: {elapsed}</span>
+      </div>
+      <div className="h-2 overflow-hidden rounded-full bg-[rgb(var(--bg-surface))]">
+        <div
+          className="h-full rounded-full bg-[rgb(var(--accent))] transition-all duration-500"
+          style={{ width: `${percent}%` }}
+        />
+      </div>
+      <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[rgb(var(--text-muted))]">
+        <span>{progress.detail}</span>
+        {progress.total && progress.done != null ? (
+          <span>
+            {progress.done}/{progress.total}
+            {progress.batches ? ` · tanda ${Math.min(progress.batch ?? 1, progress.batches)}/${progress.batches}` : ""}
+          </span>
+        ) : (
+          <span>{Math.round(percent)}%</span>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -143,6 +212,7 @@ export default function VideoEditorPage() {
   const [thumbReferenceHint, setThumbReferenceHint] = useState("");
   const [thumbLoading, setThumbLoading] = useState(false);
   const [thumbError, setThumbError] = useState<string | null>(null);
+  const [thumbProgress, setThumbProgress] = useState<GenerationProgressState | null>(null);
   const [thumbImageModelId, setThumbImageModelId] = useState(
     THUMBNAIL_IMAGE_MODELS[0]?.id ?? "google/gemini-2.5-flash-image"
   );
@@ -150,8 +220,10 @@ export default function VideoEditorPage() {
   const [sceneImageModelId, setSceneImageModelId] = useState("black-forest-labs/flux.2-pro");
   const [sceneImageLoading, setSceneImageLoading] = useState<number | null>(null);
   const [sceneImageError, setSceneImageError] = useState<string | null>(null);
+  const [sceneImageProgress, setSceneImageProgress] = useState<GenerationProgressState | null>(null);
   const [storageMode, setStorageModeState] = useState<"cloud" | "local">("cloud");
   const [localFolderName, setLocalFolderNameState] = useState<string | null>(null);
+  const [nowMs, setNowMs] = useState(Date.now());
 
   // Dynamic split method state (Iteration 1)
   const [splitConfig, setSplitConfig] = useState<SplitConfigState>({
@@ -169,7 +241,7 @@ export default function VideoEditorPage() {
   const [generatedPrompts, setGeneratedPrompts] = useState<PromptResult[]>([]);
   const [promptsLoading, setPromptsLoading] = useState(false);
   const [promptsError, setPromptsError] = useState<string | null>(null);
-  const [promptsProgress, setPromptsProgress] = useState<{ done: number; total: number } | null>(null);
+  const [promptsProgress, setPromptsProgress] = useState<GenerationProgressState | null>(null);
   const [regeneratingPromptIds, setRegeneratingPromptIds] = useState<Set<number>>(new Set());
   const skipNextPromptHydrationRef = useRef(false);
 
@@ -177,6 +249,14 @@ export default function VideoEditorPage() {
     setStorageModeState(getStorageMode());
     setLocalFolderNameState(getLocalFolderName());
   }, []);
+
+  useEffect(() => {
+    if (!thumbProgress && !sceneImageProgress && !promptsProgress) return;
+
+    setNowMs(Date.now());
+    const timer = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [thumbProgress, sceneImageProgress, promptsProgress]);
 
   useEffect(() => {
     if (!projectId || !videoId) return;
@@ -278,7 +358,23 @@ export default function VideoEditorPage() {
     }
     setThumbLoading(true);
     setThumbError(null);
+    setThumbProgress({
+      label: "Preparando miniatura",
+      detail: "Validando modelo, preset y almacenamiento.",
+      startedAt: Date.now(),
+      percent: 12,
+    });
     try {
+      setThumbProgress((prev) =>
+        prev
+          ? {
+            ...prev,
+            label: "Generando miniatura",
+            detail: "Solicitud enviada al modelo de imagen. Si el proveedor la pone en cola, la app seguirá esperando.",
+            percent: 38,
+          }
+          : prev
+      );
       const res = await fetch("/api/thumbnail/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -301,6 +397,16 @@ export default function VideoEditorPage() {
         }
         return;
       }
+      setThumbProgress((prev) =>
+        prev
+          ? {
+            ...prev,
+            label: "Guardando miniatura",
+            detail: storageMode === "local" ? "Recibí la imagen. Guardándola en la app y en tu carpeta local." : "Recibí la imagen. Guardándola en la galería.",
+            percent: 82,
+          }
+          : prev
+      );
       const thumbnail = data.thumbnail as { id: string; blobUrl: string };
       let localSaveError: string | null = null;
       if (data.imageBase64 && storageMode === "local") {
@@ -343,6 +449,7 @@ export default function VideoEditorPage() {
       setThumbError(e instanceof Error ? e.message : "Error");
     } finally {
       setThumbLoading(false);
+      setThumbProgress(null);
     }
   }
 
@@ -594,11 +701,43 @@ export default function VideoEditorPage() {
 
     setPromptsError(null);
     setRegeneratingPromptIds((prev) => new Set([...prev, ...fragmentsToRegenerate.map((fragment) => fragment.id)]));
+    const startedAt = Date.now();
+    const totalBatches = Math.ceil(fragmentsToRegenerate.length / promptGenerationClientBatchSize);
+    setPromptsProgress({
+      label: "Regenerando prompts",
+      detail: "Preparando fragmentos seleccionados.",
+      startedAt,
+      done: 0,
+      total: fragmentsToRegenerate.length,
+      batch: 0,
+      batches: totalBatches,
+    });
     try {
+      let completed = 0;
       for (let index = 0; index < fragmentsToRegenerate.length; index += promptGenerationClientBatchSize) {
         const chunk = fragmentsToRegenerate.slice(index, index + promptGenerationClientBatchSize);
+        const currentBatch = Math.floor(index / promptGenerationClientBatchSize) + 1;
+        setPromptsProgress({
+          label: "Regenerando prompts",
+          detail: `Enviando ${chunk.length} fragmento${chunk.length === 1 ? "" : "s"} al modelo.`,
+          startedAt,
+          done: completed,
+          total: fragmentsToRegenerate.length,
+          batch: currentBatch,
+          batches: totalBatches,
+        });
         const results = await requestPromptResults(chunk);
         setGeneratedPrompts((prev) => mergePromptResults(prev, results));
+        completed += results.length;
+        setPromptsProgress({
+          label: "Guardando prompts",
+          detail: "Prompts recibidos. Persistiendo cambios antes de continuar.",
+          startedAt,
+          done: completed,
+          total: fragmentsToRegenerate.length,
+          batch: currentBatch,
+          batches: totalBatches,
+        });
         try {
           const persistedResults = await persistPromptResults(results);
           setGeneratedPrompts((prev) => mergePromptResults(prev, persistedResults));
@@ -627,6 +766,7 @@ export default function VideoEditorPage() {
         for (const fragment of fragmentsToRegenerate) next.delete(fragment.id);
         return next;
       });
+      setPromptsProgress(null);
     }
   }
 
@@ -653,15 +793,43 @@ export default function VideoEditorPage() {
     setPromptsProgress(null);
     try {
       const allResults: PromptResult[] = [];
-      setPromptsProgress({ done: 0, total: promptFragments.length });
+      const startedAt = Date.now();
+      const totalBatches = Math.ceil(promptFragments.length / promptGenerationClientBatchSize);
+      setPromptsProgress({
+        label: "Preparando prompts",
+        detail: `Dividiendo el guion en ${promptFragments.length} fragmentos.`,
+        startedAt,
+        done: 0,
+        total: promptFragments.length,
+        batch: 0,
+        batches: totalBatches,
+      });
 
       for (let index = 0; index < promptFragments.length; index += promptGenerationClientBatchSize) {
         const chunk = promptFragments.slice(index, index + promptGenerationClientBatchSize);
+        const currentBatch = Math.floor(index / promptGenerationClientBatchSize) + 1;
+        setPromptsProgress({
+          label: "Generando prompts",
+          detail: `Tanda ${currentBatch}/${totalBatches}: enviando ${chunk.length} fragmentos al modelo.`,
+          startedAt,
+          done: allResults.length,
+          total: promptFragments.length,
+          batch: currentBatch,
+          batches: totalBatches,
+        });
         const chunkResults = await requestPromptResults(chunk);
         allResults.push(...chunkResults);
         const sortedResults = [...allResults].sort((a, b) => a.fragment_id - b.fragment_id);
         setGeneratedPrompts(sortedResults);
-        setPromptsProgress({ done: sortedResults.length, total: promptFragments.length });
+        setPromptsProgress({
+          label: "Guardando prompts",
+          detail: "Prompts recibidos. Guardando resultados persistentes.",
+          startedAt,
+          done: sortedResults.length,
+          total: promptFragments.length,
+          batch: currentBatch,
+          batches: totalBatches,
+        });
         try {
           const persistedResults = await persistPromptResults(chunkResults, { replaceSet: index === 0 });
           setGeneratedPrompts((prev) => mergePromptResults(prev, persistedResults));
@@ -715,10 +883,25 @@ export default function VideoEditorPage() {
       }
     }
     setSceneImageLoading(fragmentIndex);
+    setSceneImageProgress({
+      label: `Generando escena ${fragmentIndex + 1}`,
+      detail: "Preparando prompt visual y configuración del modelo.",
+      startedAt: Date.now(),
+      percent: 12,
+    });
     const modelForApi = sceneImageModelId.startsWith("openrouter:")
       ? sceneImageModelId.replace(/^openrouter:/, "")
       : sceneImageModelId;
     try {
+      setSceneImageProgress((prev) =>
+        prev
+          ? {
+            ...prev,
+            detail: "Solicitud enviada al proveedor. Puede pasar por cola antes de devolver la imagen.",
+            percent: 38,
+          }
+          : prev
+      );
       const res = await fetch("/api/scene-image/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -739,6 +922,16 @@ export default function VideoEditorPage() {
         setSceneImageError("Respuesta inválida del servidor");
         return;
       }
+      setSceneImageProgress((prev) =>
+        prev
+          ? {
+            ...prev,
+            label: `Guardando escena ${fragmentIndex + 1}`,
+            detail: storageModeForScene === "local" ? "Imagen lista. Guardándola en la app y en tu carpeta local." : "Imagen lista. Guardándola en la galería de escenas.",
+            percent: 82,
+          }
+          : prev
+      );
       const thumb = data.thumbnail as { id: string; blobUrl: string; fragmentIndex: number };
       if (data.imageBase64 && storageModeForScene === "local") {
         await setLocalThumbData(thumb.id, data.imageBase64);
@@ -778,6 +971,7 @@ export default function VideoEditorPage() {
       setSceneImageError(e instanceof Error ? e.message : "Error");
     } finally {
       setSceneImageLoading(null);
+      setSceneImageProgress(null);
     }
   }
 
@@ -1209,6 +1403,11 @@ export default function VideoEditorPage() {
                       {sceneImageError}
                     </p>
                   )}
+                  {sceneImageProgress && (
+                    <div className="mb-4">
+                      <GenerationProgressCard progress={sceneImageProgress} nowMs={nowMs} />
+                    </div>
+                  )}
                   <div className="mb-6">
                     <h3 className="text-sm font-medium text-[rgb(var(--text-primary))] mb-2">
                       Timeline del script
@@ -1245,9 +1444,7 @@ export default function VideoEditorPage() {
                       <p className="text-sm text-red-600 dark:text-red-400">{promptsError}</p>
                     )}
                     {promptsProgress && (
-                      <p className="text-sm text-[rgb(var(--text-secondary))]">
-                        Generando prompts {promptsProgress.done}/{promptsProgress.total}
-                      </p>
+                      <GenerationProgressCard progress={promptsProgress} nowMs={nowMs} />
                     )}
                     <button
                       type="button"
@@ -1523,6 +1720,9 @@ export default function VideoEditorPage() {
               </div>
               {thumbError && (
                 <p className="text-sm text-red-600 dark:text-red-400">{thumbError}</p>
+              )}
+              {thumbProgress && (
+                <GenerationProgressCard progress={thumbProgress} nowMs={nowMs} />
               )}
               <button
                 type="button"
