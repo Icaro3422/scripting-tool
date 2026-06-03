@@ -1,7 +1,7 @@
 "use client";
 
 import { useParams } from "next/navigation";
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useEffect, useState, useMemo, useRef } from "react";
 import Link from "next/link";
 import {
   FileText,
@@ -15,12 +15,13 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AI_MODELS, SCRIPT_RECOMMENDED_IDS, THUMBNAIL_IMAGE_MODELS } from "@/types/ai";
-import { DURATION_PRESETS, FRAGMENT_MAX_WORDS, type FragmentSplitMode } from "@/lib/scriptUtils";
-import { countWords, estimatedMinutes, type SplitConfigState, type PromptResult } from "@/lib/text-processing";
+import { DURATION_PRESETS } from "@/lib/scriptUtils";
+import { countWords, estimatedMinutes, splitByMethod, type SplitConfigState, type PromptResult } from "@/lib/text-processing";
 import { ScriptFragmentsTable } from "@/components/ScriptFragmentsTable";
 import { ScriptTimeline } from "@/components/ScriptTimeline";
 import { ScriptSplitConfig } from "@/components/ScriptSplitConfig";
 import { ImageStyleSelector } from "@/components/ImageStyleSelector";
+import { MasterPromptManager } from "@/components/MasterPromptManager";
 import { ExportMenu } from "@/components/ExportMenu";
 import {
   getStorageMode,
@@ -42,11 +43,120 @@ interface AIModelItem {
 
 type TabId = "script" | "title" | "description" | "tags" | "thumbnail";
 
+const promptGenerationClientBatchSize = Number.isFinite(Number(process.env.NEXT_PUBLIC_PROMPT_GENERATION_CLIENT_BATCH_SIZE))
+  ? Math.max(1, Math.floor(Number(process.env.NEXT_PUBLIC_PROMPT_GENERATION_CLIENT_BATCH_SIZE)))
+  : 5;
+
+type PromptFragmentRequest = {
+  id: number;
+  text: string;
+};
+
+type GenerationProgressState = {
+  label: string;
+  detail: string;
+  startedAt: number;
+  done?: number;
+  total?: number;
+  batch?: number;
+  batches?: number;
+  percent?: number;
+};
+
+type PromptPersistenceIdentity = {
+  scriptId: string;
+  scriptContentHash: string;
+  style: string;
+  splitConfig: SplitConfigState;
+  fragmentCount: number;
+};
+
+async function sha256Hex(value: string): Promise<string> {
+  const bytes = new TextEncoder().encode(value);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+function isLowQualityGeneratedPrompt(value: string | undefined): boolean {
+  if (!value) return true;
+
+  const trimmed = value.trim();
+  const withoutJsonPunctuation = trimmed.replace(/[\s{}\[\]"',.:;]+/g, "");
+
+  return (
+    trimmed.length < 24 ||
+    withoutJsonPunctuation.length < 12 ||
+    !/[a-zA-Z]/.test(trimmed) ||
+    /^[\s{}\[\]"',.:;\\/-]+$/.test(trimmed)
+  );
+}
+
+function formatElapsed(ms: number): string {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return minutes > 0 ? `${minutes}:${seconds.toString().padStart(2, "0")}` : `${seconds}s`;
+}
+
+function estimateActivePercent(progress: GenerationProgressState, nowMs: number): number {
+  if (typeof progress.percent === "number") {
+    return Math.min(100, Math.max(0, progress.percent));
+  }
+
+  if (progress.total && progress.total > 0 && progress.done != null) {
+    const percent = Math.round((progress.done / progress.total) * 100);
+    return Math.min(98, Math.max(8, percent));
+  }
+
+  const elapsedSeconds = Math.max(0, (nowMs - progress.startedAt) / 1000);
+  return Math.min(94, 12 + elapsedSeconds * 3);
+}
+
+function GenerationProgressCard({
+  progress,
+  nowMs,
+}: {
+  progress: GenerationProgressState;
+  nowMs: number;
+}) {
+  const percent = estimateActivePercent(progress, nowMs);
+  const elapsed = formatElapsed(nowMs - progress.startedAt);
+
+  return (
+    <div className="rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--bg-muted))] p-3 space-y-2">
+      <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+        <span className="font-medium text-[rgb(var(--text-primary))]">{progress.label}</span>
+        <span className="text-xs text-[rgb(var(--text-muted))]">Tiempo: {elapsed}</span>
+      </div>
+      <div className="h-2 overflow-hidden rounded-full bg-[rgb(var(--bg-surface))]">
+        <div
+          className="h-full rounded-full bg-[rgb(var(--accent))] transition-all duration-500"
+          style={{ width: `${percent}%` }}
+        />
+      </div>
+      <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[rgb(var(--text-muted))]">
+        <span>{progress.detail}</span>
+        {progress.total && progress.done != null ? (
+          <span>
+            {progress.done}/{progress.total}
+            {progress.batches ? ` · tanda ${Math.min(progress.batch ?? 1, progress.batches)}/${progress.batches}` : ""}
+          </span>
+        ) : (
+          <span>{Math.round(percent)}%</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 interface Script {
   id: string;
   title: string;
   content: string;
   aiModel: string | null;
+  source?: string;
   createdAt: string;
 }
 
@@ -81,6 +191,8 @@ export default function VideoEditorPage() {
   const [aiModels, setAiModels] = useState<AIModelItem[]>([]);
   const [tab, setTab] = useState<TabId>("script");
   const [topic, setTopic] = useState("");
+  const [pastedScript, setPastedScript] = useState("");
+  const [scriptMode, setScriptMode] = useState<"generate" | "paste">("generate");
   const [targetDurationId, setTargetDurationId] = useState<string>("5");
   const [modelId, setModelId] = useState(AI_MODELS[0]?.id ?? "");
   const [presetId, setPresetId] = useState<string>("");
@@ -101,16 +213,18 @@ export default function VideoEditorPage() {
   const [thumbReferenceHint, setThumbReferenceHint] = useState("");
   const [thumbLoading, setThumbLoading] = useState(false);
   const [thumbError, setThumbError] = useState<string | null>(null);
+  const [thumbProgress, setThumbProgress] = useState<GenerationProgressState | null>(null);
   const [thumbImageModelId, setThumbImageModelId] = useState(
     THUMBNAIL_IMAGE_MODELS[0]?.id ?? "google/gemini-2.5-flash-image"
   );
   const [thumbWordStyle, setThumbWordStyle] = useState<"preset" | "few" | "many">("preset");
   const [sceneImageModelId, setSceneImageModelId] = useState("black-forest-labs/flux.2-pro");
-  const [fragmentSplitMode, setFragmentSplitMode] = useState<FragmentSplitMode>("range");
   const [sceneImageLoading, setSceneImageLoading] = useState<number | null>(null);
   const [sceneImageError, setSceneImageError] = useState<string | null>(null);
+  const [sceneImageProgress, setSceneImageProgress] = useState<GenerationProgressState | null>(null);
   const [storageMode, setStorageModeState] = useState<"cloud" | "local">("cloud");
   const [localFolderName, setLocalFolderNameState] = useState<string | null>(null);
+  const [nowMs, setNowMs] = useState(Date.now());
 
   // Dynamic split method state (Iteration 1)
   const [splitConfig, setSplitConfig] = useState<SplitConfigState>({
@@ -125,9 +239,14 @@ export default function VideoEditorPage() {
 
   // Image prompt generation state (Iteration 2)
   const [imageStyle, setImageStyle] = useState("");
+  const [masterPromptId, setMasterPromptId] = useState<string | null>(null);
   const [generatedPrompts, setGeneratedPrompts] = useState<PromptResult[]>([]);
   const [promptsLoading, setPromptsLoading] = useState(false);
   const [promptsError, setPromptsError] = useState<string | null>(null);
+  const [promptsProgress, setPromptsProgress] = useState<GenerationProgressState | null>(null);
+  const [regeneratingPromptIds, setRegeneratingPromptIds] = useState<Set<number>>(new Set());
+  const skipNextPromptHydrationRef = useRef(false);
+  const stateRestoredRef = useRef(false);
 
   useEffect(() => {
     setStorageModeState(getStorageMode());
@@ -135,13 +254,23 @@ export default function VideoEditorPage() {
   }, []);
 
   useEffect(() => {
+    if (!thumbProgress && !sceneImageProgress && !promptsProgress) return;
+
+    setNowMs(Date.now());
+    const timer = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [thumbProgress, sceneImageProgress, promptsProgress]);
+
+  useEffect(() => {
     if (!projectId || !videoId) return;
+    const controller = new AbortController();
     Promise.all([
-      fetch(`/api/projects/${projectId}/videos/${videoId}`).then((r) => r.json()),
-      fetch("/api/presets").then((r) => r.json()),
-      fetch("/api/ai/models").then((r) => r.json()),
+      fetch(`/api/projects/${projectId}/videos/${videoId}`, { signal: controller.signal }).then((r) => r.json()),
+      fetch("/api/presets", { signal: controller.signal }).then((r) => r.json()),
+      fetch("/api/ai/models", { signal: controller.signal }).then((r) => r.json()),
     ])
       .then(([videoData, presetsData, modelsData]) => {
+        if (controller.signal.aborted) return;
         if (videoData.video) setVideo(videoData.video);
         if (presetsData.presets) setPresets(presetsData.presets);
         if (modelsData.models?.length) {
@@ -172,8 +301,60 @@ export default function VideoEditorPage() {
             }))
           );
         }
+      })
+      .catch((loadError) => {
+        if ((loadError as Error).name !== "AbortError") {
+          setError(loadError instanceof Error ? loadError.message : "Error al cargar video");
+        }
       });
+
+    return () => controller.abort();
   }, [projectId, videoId]);
+
+  // Restore imageStyle and splitConfig from active prompt set on page load
+  useEffect(() => {
+    const scriptId = video?.scripts?.[0]?.id;
+    if (!projectId || !videoId || !scriptId || stateRestoredRef.current) return;
+
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        const res = await fetch(
+          `/api/projects/${projectId}/videos/${videoId}/prompts?latestForVideo=true`,
+          { signal: controller.signal },
+        );
+        if (!res.ok) return;
+        const data = await res.json();
+        if (controller.signal.aborted) return;
+
+        const style = data?.promptSet?.style;
+        if (typeof style === "string" && style) {
+          setImageStyle(style);
+          stateRestoredRef.current = true;
+
+          // Restore splitConfig if available
+          const sc = data?.promptSet?.splitConfig;
+          if (sc && typeof sc === "object") {
+            setSplitConfig({
+              method: sc.method ?? "strict",
+              targetChunks: sc.targetChunks ?? 10,
+              strictMinWords: sc.strictMinWords ?? 15,
+              strictMaxWords: sc.strictMaxWords ?? 21,
+            });
+          }
+
+          // Restore prompts immediately
+          if (Array.isArray(data?.results) && data.results.length > 0) {
+            setGeneratedPrompts(data.results as PromptResult[]);
+          }
+        }
+      } catch {
+        // Silently fail — restoration is best-effort
+      }
+    })();
+
+    return () => controller.abort();
+  }, [projectId, videoId, video?.scripts]);
 
   useEffect(() => {
     if (video?.title && !thumbTitle) setThumbTitle(video.title);
@@ -225,7 +406,23 @@ export default function VideoEditorPage() {
     }
     setThumbLoading(true);
     setThumbError(null);
+    setThumbProgress({
+      label: "Preparando miniatura",
+      detail: "Validando modelo, preset y almacenamiento.",
+      startedAt: Date.now(),
+      percent: 12,
+    });
     try {
+      setThumbProgress((prev) =>
+        prev
+          ? {
+            ...prev,
+            label: "Generando miniatura",
+            detail: "Solicitud enviada al modelo de imagen. Si el proveedor la pone en cola, la app seguirá esperando.",
+            percent: 38,
+          }
+          : prev
+      );
       const res = await fetch("/api/thumbnail/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -248,6 +445,16 @@ export default function VideoEditorPage() {
         }
         return;
       }
+      setThumbProgress((prev) =>
+        prev
+          ? {
+            ...prev,
+            label: "Guardando miniatura",
+            detail: storageMode === "local" ? "Recibí la imagen. Guardándola en la app y en tu carpeta local." : "Recibí la imagen. Guardándola en la galería.",
+            percent: 82,
+          }
+          : prev
+      );
       const thumbnail = data.thumbnail as { id: string; blobUrl: string };
       let localSaveError: string | null = null;
       if (data.imageBase64 && storageMode === "local") {
@@ -290,15 +497,18 @@ export default function VideoEditorPage() {
       setThumbError(e instanceof Error ? e.message : "Error");
     } finally {
       setThumbLoading(false);
+      setThumbProgress(null);
     }
   }
 
   async function handleGenerate(type: "script" | "title" | "description" | "tags") {
     const topicText = type === "script" ? topic : video?.title ?? topic;
-    if (!topicText.trim()) {
-      setError("Escribe el tema o título para generar.");
+    
+    if (!topicText.trim() && (scriptMode !== "paste" || !pastedScript.trim())) {
+      setError(scriptMode === "paste" ? "Pega un guion primero." : "Escribe el tema o título para generar.");
       return;
     }
+    
     setLoading(true);
     setError(null);
     try {
@@ -306,18 +516,26 @@ export default function VideoEditorPage() {
         type === "script"
           ? DURATION_PRESETS.find((p) => p.id === targetDurationId)?.minutes ?? 5
           : undefined;
+
+      const requestBody: Record<string, unknown> = {
+        videoId,
+        type,
+      };
+
+      if (scriptMode === "paste" && type === "script") {
+        requestBody.content = pastedScript;
+      } else {
+        requestBody.presetId = presetId || undefined;
+        requestBody.topic = topicText;
+        requestBody.modelId = aiModels.find((m) => (m.openRouterId || m.id) === modelId)?.openRouterId || modelId;
+        requestBody.provider = aiModels.find((m) => (m.openRouterId || m.id) === modelId)?.provider;
+        requestBody.targetDurationMinutes = targetMinutes;
+      }
+
       const res = await fetch("/api/script/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          videoId,
-          presetId: presetId || undefined,
-          topic: topicText,
-          modelId: aiModels.find((m) => (m.openRouterId || m.id) === modelId)?.openRouterId || modelId,
-          provider: aiModels.find((m) => (m.openRouterId || m.id) === modelId)?.provider,
-          type,
-          targetDurationMinutes: targetMinutes,
-        }),
+        body: JSON.stringify(requestBody),
       });
       const raw = await res.text();
       let data: {
@@ -371,6 +589,10 @@ export default function VideoEditorPage() {
         setVideo((prev) =>
           prev ? { ...prev, scripts: [newScript, ...prev.scripts] } : null
         );
+        if (scriptMode === "paste") {
+          setPastedScript("");
+          setScriptMode("generate");
+        }
       }
       if (data.generated && (type === "title" || type === "description")) {
         setVideo((prev) =>
@@ -393,60 +615,295 @@ export default function VideoEditorPage() {
     }
   }
 
-  const handlePromptChange = useCallback((fragmentId: number, newPrompt: string) => {
+  async function getPromptPersistenceIdentity(): Promise<PromptPersistenceIdentity | null> {
+    const persistedScriptContent = latestScript?.content?.trim() ?? "";
+    if (
+      !latestScript?.id ||
+      !imageStyle.trim() ||
+      promptFragments.length === 0 ||
+      !persistedScriptContent ||
+      scriptContentForFragments !== persistedScriptContent
+    ) {
+      return null;
+    }
+
+    return {
+      scriptId: latestScript.id,
+      scriptContentHash: await sha256Hex(persistedScriptContent),
+      style: imageStyle.trim(),
+      splitConfig,
+      fragmentCount: promptFragments.length,
+    };
+  }
+
+  async function persistPromptResults(
+    results: PromptResult[],
+    options: { source?: "ai" | "manual"; replaceSet?: boolean } = {},
+  ): Promise<PromptResult[]> {
+    const identity = await getPromptPersistenceIdentity();
+    if (!identity || !projectId || !videoId) return results;
+
+    const res = await fetch(`/api/projects/${projectId}/videos/${videoId}/prompts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...identity,
+        results,
+        source: options.source ?? "ai",
+        replaceSet: options.replaceSet ?? false,
+      }),
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) {
+      const message = data && typeof data === "object" && typeof data.error === "string"
+        ? data.error
+        : "Error al guardar prompts";
+      throw new Error(message);
+    }
+
+    return data && typeof data === "object" && Array.isArray(data.results)
+      ? data.results as PromptResult[]
+      : results;
+  }
+
+  async function handlePromptChange(fragmentId: number, newPrompt: string) {
     setGeneratedPrompts((prev) =>
       prev.map((p) =>
         p.fragment_id === fragmentId ? { ...p, image_prompt: newPrompt } : p
       )
     );
-  }, []);
+    const identity = await getPromptPersistenceIdentity();
+    const fragment = promptFragments.find((item) => item.id === fragmentId);
+    if (!identity || !fragment || !projectId || !videoId) {
+      setPromptsError("La edición quedó solo en pantalla: guarda el guion y selecciona estilo para persistirla.");
+      return;
+    }
+
+    try {
+      const res = await fetch(`/api/projects/${projectId}/videos/${videoId}/prompts`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...identity,
+          fragmentId,
+          originalText: fragment.text,
+          imagePrompt: newPrompt,
+        }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        const message = data && typeof data === "object" && typeof data.error === "string"
+          ? data.error
+          : "Error al guardar edición del prompt";
+        throw new Error(message);
+      }
+    } catch (e) {
+      setPromptsError(e instanceof Error ? e.message : "Error al guardar edición del prompt");
+    }
+  }
+
+  async function requestPromptResults(fragments: PromptFragmentRequest[]): Promise<PromptResult[]> {
+    const body: Record<string, unknown> = { fragments };
+    if (masterPromptId) {
+      body.masterPromptId = masterPromptId;
+    } else {
+      body.style = imageStyle;
+    }
+    const res = await fetch("/api/prompts/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) {
+      const errorMsg = data && typeof data === "object" && typeof data.error === "string"
+        ? data.error
+        : "Error al generar prompts";
+      throw new Error(errorMsg);
+    }
+    if (!data || typeof data !== "object" || !Array.isArray(data.results)) {
+      throw new Error("Respuesta inválida");
+    }
+
+    return data.results as PromptResult[];
+  }
+
+  function mergePromptResults(current: PromptResult[], updates: PromptResult[]): PromptResult[] {
+    const byId = new Map(current.map((prompt) => [prompt.fragment_id, prompt]));
+    for (const update of updates) {
+      byId.set(update.fragment_id, update);
+    }
+    return Array.from(byId.values()).sort((a, b) => a.fragment_id - b.fragment_id);
+  }
+
+  async function regeneratePromptFragments(fragmentIds: number[]) {
+    const uniqueIds = Array.from(new Set(fragmentIds)).sort((a, b) => a - b);
+    const fragmentsToRegenerate = promptFragments.filter((fragment) => uniqueIds.includes(fragment.id));
+
+    if (!fragmentsToRegenerate.length) {
+      setPromptsError("No encontré fragmentos para regenerar.");
+      return;
+    }
+    if (!imageStyle.trim() && !masterPromptId) {
+      setPromptsError("Selecciona un estilo de imagen o un Master Prompt.");
+      return;
+    }
+    if (!latestScript?.id || scriptContentForFragments !== latestScript.content.trim()) {
+      setPromptsError("Guarda o recarga el guion más reciente antes de regenerar prompts persistentes.");
+      return;
+    }
+
+    setPromptsError(null);
+    setRegeneratingPromptIds((prev) => new Set([...prev, ...fragmentsToRegenerate.map((fragment) => fragment.id)]));
+    const startedAt = Date.now();
+    const totalBatches = Math.ceil(fragmentsToRegenerate.length / promptGenerationClientBatchSize);
+    setPromptsProgress({
+      label: "Regenerando prompts",
+      detail: "Preparando fragmentos seleccionados.",
+      startedAt,
+      done: 0,
+      total: fragmentsToRegenerate.length,
+      batch: 0,
+      batches: totalBatches,
+    });
+    try {
+      let completed = 0;
+      for (let index = 0; index < fragmentsToRegenerate.length; index += promptGenerationClientBatchSize) {
+        const chunk = fragmentsToRegenerate.slice(index, index + promptGenerationClientBatchSize);
+        const currentBatch = Math.floor(index / promptGenerationClientBatchSize) + 1;
+        setPromptsProgress({
+          label: "Regenerando prompts",
+          detail: `Enviando ${chunk.length} fragmento${chunk.length === 1 ? "" : "s"} al modelo.`,
+          startedAt,
+          done: completed,
+          total: fragmentsToRegenerate.length,
+          batch: currentBatch,
+          batches: totalBatches,
+        });
+        const results = await requestPromptResults(chunk);
+        setGeneratedPrompts((prev) => mergePromptResults(prev, results));
+        completed += results.length;
+        setPromptsProgress({
+          label: "Guardando prompts",
+          detail: "Prompts recibidos. Persistiendo cambios antes de continuar.",
+          startedAt,
+          done: completed,
+          total: fragmentsToRegenerate.length,
+          batch: currentBatch,
+          batches: totalBatches,
+        });
+        try {
+          const persistedResults = await persistPromptResults(results);
+          setGeneratedPrompts((prev) => mergePromptResults(prev, persistedResults));
+        } catch (persistError) {
+          setPromptsError(
+            persistError instanceof Error
+              ? `Prompt regenerado, pero no se pudo guardar: ${persistError.message}`
+              : "Prompt regenerado, pero no se pudo guardar.",
+          );
+        }
+        setRegeneratingPromptIds((prev) => {
+          const next = new Set(prev);
+          for (const fragment of chunk) next.delete(fragment.id);
+          return next;
+        });
+      }
+      skipNextPromptHydrationRef.current = true;
+    } catch (e) {
+      const message = e instanceof TypeError && e.message.toLowerCase().includes("fetch")
+        ? "Se perdió la conexión con el servidor durante la regeneración. Los prompts parciales se conservaron."
+        : e instanceof Error ? e.message : "Error";
+      setPromptsError(message);
+    } finally {
+      setRegeneratingPromptIds((prev) => {
+        const next = new Set(prev);
+        for (const fragment of fragmentsToRegenerate) next.delete(fragment.id);
+        return next;
+      });
+      setPromptsProgress(null);
+    }
+  }
+
+  async function handleRegenerateProblemPrompts() {
+    await regeneratePromptFragments(Array.from(invalidPromptIds));
+  }
 
   async function handleGeneratePrompts() {
     if (!scriptContentForFragments.trim()) {
       setPromptsError("Genera un script primero.");
       return;
     }
-    if (!imageStyle.trim()) {
-      setPromptsError("Selecciona un estilo de imagen.");
+    if (!imageStyle.trim() && !masterPromptId) {
+      setPromptsError("Selecciona un estilo de imagen o un Master Prompt.");
+      return;
+    }
+    if (!latestScript?.id || scriptContentForFragments !== latestScript.content.trim()) {
+      setPromptsError("Guarda o recarga el guion más reciente antes de generar prompts persistentes.");
       return;
     }
     setPromptsLoading(true);
     setPromptsError(null);
+    setGeneratedPrompts([]);
+    setPromptsProgress(null);
     try {
-      // Split the script to get fragments with IDs
-      const { splitByMethod } = await import("@/lib/text-processing");
-      const method = splitConfig.method;
-      const fragments = splitByMethod(scriptContentForFragments, method, {
-        minWords: splitConfig.strictMinWords,
-        maxWords: splitConfig.strictMaxWords,
-        targetChunks: splitConfig.targetChunks,
+      const allResults: PromptResult[] = [];
+      const startedAt = Date.now();
+      const totalBatches = Math.ceil(promptFragments.length / promptGenerationClientBatchSize);
+      setPromptsProgress({
+        label: "Preparando prompts",
+        detail: `Dividiendo el guion en ${promptFragments.length} fragmentos.`,
+        startedAt,
+        done: 0,
+        total: promptFragments.length,
+        batch: 0,
+        batches: totalBatches,
       });
 
-      const res = await fetch("/api/prompts/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          fragments: fragments.map((f) => ({ id: f.id, text: f.text })),
-          style: imageStyle,
-        }),
-      });
-      const data = await res.json().catch(() => null);
-      if (!res.ok) {
-        const errorMsg = data && typeof data === "object" && typeof data.error === "string"
-          ? data.error
-          : "Error al generar prompts";
-        setPromptsError(errorMsg);
-        return;
+      for (let index = 0; index < promptFragments.length; index += promptGenerationClientBatchSize) {
+        const chunk = promptFragments.slice(index, index + promptGenerationClientBatchSize);
+        const currentBatch = Math.floor(index / promptGenerationClientBatchSize) + 1;
+        setPromptsProgress({
+          label: "Generando prompts",
+          detail: `Tanda ${currentBatch}/${totalBatches}: enviando ${chunk.length} fragmentos al modelo.`,
+          startedAt,
+          done: allResults.length,
+          total: promptFragments.length,
+          batch: currentBatch,
+          batches: totalBatches,
+        });
+        const chunkResults = await requestPromptResults(chunk);
+        allResults.push(...chunkResults);
+        const sortedResults = [...allResults].sort((a, b) => a.fragment_id - b.fragment_id);
+        setGeneratedPrompts(sortedResults);
+        setPromptsProgress({
+          label: "Guardando prompts",
+          detail: "Prompts recibidos. Guardando resultados persistentes.",
+          startedAt,
+          done: sortedResults.length,
+          total: promptFragments.length,
+          batch: currentBatch,
+          batches: totalBatches,
+        });
+        try {
+          const persistedResults = await persistPromptResults(chunkResults, { replaceSet: index === 0 });
+          setGeneratedPrompts((prev) => mergePromptResults(prev, persistedResults));
+        } catch (persistError) {
+          setPromptsError(
+            persistError instanceof Error
+              ? `Prompts generados, pero no se pudieron guardar: ${persistError.message}`
+              : "Prompts generados, pero no se pudieron guardar.",
+          );
+        }
       }
-      if (!data || typeof data !== "object" || !Array.isArray(data.results)) {
-        setPromptsError("Respuesta inválida");
-        return;
-      }
-      setGeneratedPrompts(data.results as PromptResult[]);
+      skipNextPromptHydrationRef.current = true;
     } catch (e) {
-      setPromptsError(e instanceof Error ? e.message : "Error");
+      const message = e instanceof TypeError && e.message.toLowerCase().includes("fetch")
+        ? "Se perdió la conexión con el servidor durante la generación. Los prompts parciales se conservaron; reintentá para continuar."
+        : e instanceof Error ? e.message : "Error";
+      setPromptsError(message);
     } finally {
       setPromptsLoading(false);
+      setPromptsProgress(null);
     }
   }
 
@@ -480,10 +937,25 @@ export default function VideoEditorPage() {
       }
     }
     setSceneImageLoading(fragmentIndex);
+    setSceneImageProgress({
+      label: `Generando escena ${fragmentIndex + 1}`,
+      detail: "Preparando prompt visual y configuración del modelo.",
+      startedAt: Date.now(),
+      percent: 12,
+    });
     const modelForApi = sceneImageModelId.startsWith("openrouter:")
       ? sceneImageModelId.replace(/^openrouter:/, "")
       : sceneImageModelId;
     try {
+      setSceneImageProgress((prev) =>
+        prev
+          ? {
+            ...prev,
+            detail: "Solicitud enviada al proveedor. Puede pasar por cola antes de devolver la imagen.",
+            percent: 38,
+          }
+          : prev
+      );
       const res = await fetch("/api/scene-image/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -504,6 +976,16 @@ export default function VideoEditorPage() {
         setSceneImageError("Respuesta inválida del servidor");
         return;
       }
+      setSceneImageProgress((prev) =>
+        prev
+          ? {
+            ...prev,
+            label: `Guardando escena ${fragmentIndex + 1}`,
+            detail: storageModeForScene === "local" ? "Imagen lista. Guardándola en la app y en tu carpeta local." : "Imagen lista. Guardándola en la galería de escenas.",
+            percent: 82,
+          }
+          : prev
+      );
       const thumb = data.thumbnail as { id: string; blobUrl: string; fragmentIndex: number };
       if (data.imageBase64 && storageModeForScene === "local") {
         await setLocalThumbData(thumb.id, data.imageBase64);
@@ -543,6 +1025,7 @@ export default function VideoEditorPage() {
       setSceneImageError(e instanceof Error ? e.message : "Error");
     } finally {
       setSceneImageLoading(null);
+      setSceneImageProgress(null);
     }
   }
 
@@ -560,6 +1043,94 @@ export default function VideoEditorPage() {
     () => (generatedScript ?? latestScript?.content ?? "").trim(),
     [generatedScript, latestScript?.content]
   );
+  const promptFragments = useMemo<PromptFragmentRequest[]>(() => {
+    if (!scriptContentForFragments.trim()) return [];
+
+    return splitByMethod(scriptContentForFragments, splitConfig.method, {
+      minWords: splitConfig.strictMinWords,
+      maxWords: splitConfig.strictMaxWords,
+      targetChunks: splitConfig.targetChunks,
+    }).map((fragment) => ({ id: fragment.id, text: fragment.text }));
+  }, [scriptContentForFragments, splitConfig]);
+  const promptPersistenceReady = Boolean(
+    latestScript?.id &&
+    imageStyle.trim() &&
+    scriptContentForFragments === latestScript.content.trim(),
+  );
+  const promptSetKey = useMemo(
+    () => JSON.stringify({
+      scriptId: latestScript?.id ?? null,
+      scriptContent: scriptContentForFragments,
+      style: imageStyle.trim().toLowerCase(),
+      splitConfig,
+    }),
+    [latestScript?.id, scriptContentForFragments, imageStyle, splitConfig],
+  );
+  const invalidPromptIds = useMemo(() => {
+    const promptMap = new Map(generatedPrompts.map((prompt) => [prompt.fragment_id, prompt.image_prompt]));
+    return new Set(
+      promptFragments
+        .filter((fragment) => isLowQualityGeneratedPrompt(promptMap.get(fragment.id)))
+        .map((fragment) => fragment.id),
+    );
+  }, [generatedPrompts, promptFragments]);
+
+  useEffect(() => {
+    if (
+      !projectId ||
+      !videoId ||
+      !latestScript?.id ||
+      !imageStyle.trim() ||
+      promptFragments.length === 0 ||
+      scriptContentForFragments !== latestScript.content.trim() ||
+      promptsLoading ||
+      regeneratingPromptIds.size > 0
+    ) {
+      return;
+    }
+
+    if (skipNextPromptHydrationRef.current) {
+      skipNextPromptHydrationRef.current = false;
+      return;
+    }
+
+    const controller = new AbortController();
+    void (async () => {
+      const params = new URLSearchParams({
+        scriptId: latestScript.id,
+        scriptContentHash: await sha256Hex(latestScript.content.trim()),
+        splitConfig: JSON.stringify(splitConfig),
+        style: imageStyle.trim(),
+      });
+
+      fetch(`/api/projects/${projectId}/videos/${videoId}/prompts?${params.toString()}`, {
+        signal: controller.signal,
+      })
+        .then((response) => response.json())
+        .then((data) => {
+          if (controller.signal.aborted) return;
+          setGeneratedPrompts(Array.isArray(data?.results) ? data.results as PromptResult[] : []);
+        })
+        .catch((error) => {
+          if ((error as Error).name !== "AbortError") {
+            console.warn("No se pudieron cargar prompts persistidos:", error);
+          }
+        });
+    })();
+
+    return () => controller.abort();
+  }, [
+    projectId,
+    videoId,
+    latestScript?.id,
+    latestScript?.content,
+    promptFragments.length,
+    scriptContentForFragments,
+    splitConfig,
+    imageStyle,
+    promptsLoading,
+    regeneratingPromptIds.size,
+  ]);
   const allScriptModels = aiModels.length
     ? aiModels
     : AI_MODELS.map((m) => ({
@@ -725,50 +1296,114 @@ export default function VideoEditorPage() {
       {tab === "script" && (
         <div className="space-y-6">
           <div className="rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--bg-surface))] p-4">
-            <label className="block text-sm font-medium text-[rgb(var(--text-primary))] mb-2">
-              Tema del video (para generar el guion)
-            </label>
-            <div className="flex flex-wrap gap-2 items-end">
-              <input
-                type="text"
-                value={topic}
-                onChange={(e) => setTopic(e.target.value)}
-                placeholder="Ej: 5 tips para editar más rápido"
-                className="flex-1 min-w-[200px] rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--bg-muted))] px-3 py-2.5 text-[rgb(var(--text-primary))] placeholder:text-[rgb(var(--text-muted))] focus:outline-none focus:ring-2 focus:ring-[rgb(var(--accent))]"
-              />
-              <div className="flex items-center gap-2">
-                <label className="text-xs text-[rgb(var(--text-muted))] whitespace-nowrap">
-                  Duración objetivo
-                </label>
-                <select
-                  value={targetDurationId}
-                  onChange={(e) => setTargetDurationId(e.target.value)}
-                  className="rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--bg-muted))] px-3 py-2.5 text-[rgb(var(--text-primary))] focus:outline-none focus:ring-2 focus:ring-[rgb(var(--accent))]"
-                >
-                  {DURATION_PRESETS.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
+            <div className="flex gap-2 mb-4">
               <button
                 type="button"
-                onClick={() => handleGenerate("script")}
-                disabled={loading}
-                className="rounded-lg bg-[rgb(var(--accent))] px-4 py-2.5 text-white font-medium hover:opacity-90 disabled:opacity-50 flex items-center gap-2"
-              >
-                {loading ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Sparkles className="h-4 w-4" />
+                onClick={() => setScriptMode("generate")}
+                className={cn(
+                  "px-3 py-1.5 text-sm font-medium rounded-lg transition",
+                  scriptMode === "generate"
+                    ? "bg-[rgb(var(--accent))] text-white"
+                    : "bg-[rgb(var(--bg-muted))] text-[rgb(var(--text-muted))] hover:text-[rgb(var(--text-primary))]"
                 )}
-                Generar script
+              >
+                Generar
+              </button>
+              <button
+                type="button"
+                onClick={() => setScriptMode("paste")}
+                className={cn(
+                  "px-3 py-1.5 text-sm font-medium rounded-lg transition",
+                  scriptMode === "paste"
+                    ? "bg-[rgb(var(--accent))] text-white"
+                    : "bg-[rgb(var(--bg-muted))] text-[rgb(var(--text-muted))] hover:text-[rgb(var(--text-primary))]"
+                )}
+              >
+                Pegar
               </button>
             </div>
-            <p className="text-xs text-[rgb(var(--text-muted))] mt-2">
-              La longitud del guion determina la duración del video (~150 palabras/min).
-            </p>
+
+            {scriptMode === "generate" ? (
+              <div className="space-y-4">
+                <label className="block text-sm font-medium text-[rgb(var(--text-primary))] mb-2">
+                  Tema del video (para generar el guion)
+                </label>
+                <div className="flex flex-wrap gap-2 items-end">
+                  <input
+                    type="text"
+                    value={topic}
+                    onChange={(e) => setTopic(e.target.value)}
+                    placeholder="Ej: 5 tips para editar más rápido"
+                    className="flex-1 min-w-[200px] rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--bg-muted))] px-3 py-2.5 text-[rgb(var(--text-primary))] placeholder:text-[rgb(var(--text-muted))] focus:outline-none focus:ring-2 focus:ring-[rgb(var(--accent))]"
+                  />
+                  <div className="flex items-center gap-2">
+                    <label className="text-xs text-[rgb(var(--text-muted))] whitespace-nowrap">
+                      Duración objetivo
+                    </label>
+                    <select
+                      value={targetDurationId}
+                      onChange={(e) => setTargetDurationId(e.target.value)}
+                      className="rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--bg-muted))] px-3 py-2.5 text-[rgb(var(--text-primary))] focus:outline-none focus:ring-2 focus:ring-[rgb(var(--accent))]"
+                    >
+                      {DURATION_PRESETS.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleGenerate("script")}
+                    disabled={loading}
+                    className="rounded-lg bg-[rgb(var(--accent))] px-4 py-2.5 text-white font-medium hover:opacity-90 disabled:opacity-50 flex items-center gap-2"
+                  >
+                    {loading ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Sparkles className="h-4 w-4" />
+                    )}
+                    Generar script
+                  </button>
+                </div>
+                <p className="text-xs text-[rgb(var(--text-muted))]">
+                  La longitud del guion determina la duración del video (~150 palabras/min).
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <label className="block text-sm font-medium text-[rgb(var(--text-primary))] mb-2">
+                  Pega tu guion aquí
+                </label>
+                <textarea
+                  value={pastedScript}
+                  onChange={(e) => setPastedScript(e.target.value)}
+                  placeholder="Pega tu guion aquí... El guion se usará para generar las escenas."
+                  className="w-full min-h-[200px] rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--bg-muted))] px-3 py-2.5 text-[rgb(var(--text-primary))] placeholder:text-[rgb(var(--text-muted))] focus:outline-none focus:ring-2 focus:ring-[rgb(var(--accent))] resize-y"
+                />
+                <div className="flex justify-between items-center">
+                  <p className="text-xs text-[rgb(var(--text-muted))]">
+                    {pastedScript.length} / 51200 caracteres
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => handleGenerate("script")}
+                    disabled={loading || !pastedScript.trim() || pastedScript.trim().length < 50}
+                    className="rounded-lg bg-[rgb(var(--accent))] px-4 py-2.5 text-white font-medium hover:opacity-90 disabled:opacity-50 flex items-center gap-2"
+                  >
+                    {loading ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Sparkles className="h-4 w-4" />
+                    )}
+                    Guardar script
+                  </button>
+                </div>
+                <p className="text-xs text-[rgb(var(--text-muted))]">
+                  Mínimo 50 caracteres. ~150 palabras = 1 minuto de video.
+                </p>
+              </div>
+            )}
           </div>
           {lastScriptStats && (
             <div className="rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--bg-muted))] px-4 py-3 flex flex-wrap gap-4 text-sm">
@@ -822,30 +1457,17 @@ export default function VideoEditorPage() {
                       {sceneImageError}
                     </p>
                   )}
-                  <div className="flex flex-wrap items-center gap-3 mb-4">
-                    <label className="text-xs font-medium text-[rgb(var(--text-muted))] shrink-0">
-                      Cómo dividir el guion en escenas:
-                    </label>
-                    <select
-                      value={fragmentSplitMode}
-                      onChange={(e) => setFragmentSplitMode(e.target.value as FragmentSplitMode)}
-                      className="rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--bg-muted))] px-3 py-2 text-sm text-[rgb(var(--text-primary))] focus:outline-none focus:ring-2 focus:ring-[rgb(var(--accent))] max-w-full"
-                    >
-                      <option value="range">
-                        Rango fijo (máx. {FRAGMENT_MAX_WORDS} palabras por escena)
-                      </option>
-                      <option value="punctuation">
-                        Por signos de puntuación (frases u oraciones)
-                      </option>
-                    </select>
-                  </div>
+                  {sceneImageProgress && (
+                    <div className="mb-4">
+                      <GenerationProgressCard progress={sceneImageProgress} nowMs={nowMs} />
+                    </div>
+                  )}
                   <div className="mb-6">
                     <h3 className="text-sm font-medium text-[rgb(var(--text-primary))] mb-2">
                       Timeline del script
                     </h3>
                     <ScriptTimeline
                       scriptContent={scriptContentForFragments}
-                      fragmentSplitMode={fragmentSplitMode}
                       sceneImageModelId={sceneImageModelId}
                       onSceneImageModelChange={setSceneImageModelId}
                       onGenerateScene={handleGenerateScene}
@@ -857,8 +1479,7 @@ export default function VideoEditorPage() {
                   </div>
                   <ScriptSplitConfig
                     scriptContent={scriptContentForFragments}
-                    initialMethod={splitMethod}
-                    initialConfig={splitConfig}
+                    value={splitConfig}
                     onMethodChange={(_method, config) => {
                       setSplitConfig(config);
                     }}
@@ -872,9 +1493,15 @@ export default function VideoEditorPage() {
                     <ImageStyleSelector
                       value={imageStyle}
                       onChange={setImageStyle}
+                      masterPromptId={masterPromptId}
+                      onMasterPromptChange={setMasterPromptId}
                     />
+                    <MasterPromptManager />
                     {promptsError && (
                       <p className="text-sm text-red-600 dark:text-red-400">{promptsError}</p>
+                    )}
+                    {promptsProgress && (
+                      <GenerationProgressCard progress={promptsProgress} nowMs={nowMs} />
                     )}
                     <button
                       type="button"
@@ -889,6 +1516,17 @@ export default function VideoEditorPage() {
                       )}
                       Generar prompts
                     </button>
+                    {generatedPrompts.length > 0 && invalidPromptIds.size > 0 && (
+                      <button
+                        type="button"
+                        onClick={handleRegenerateProblemPrompts}
+                        disabled={promptsLoading || regeneratingPromptIds.size > 0}
+                        className="rounded-lg border border-[rgb(var(--border))] px-4 py-2.5 text-[rgb(var(--text-primary))] font-medium hover:bg-[rgb(var(--bg-muted))] disabled:opacity-50 flex items-center gap-2"
+                      >
+                        {regeneratingPromptIds.size > 0 && <Loader2 className="h-4 w-4 animate-spin" />}
+                        Regenerar faltantes/problemáticos ({invalidPromptIds.size})
+                      </button>
+                    )}
                   </div>
 
                   <h3 className="text-sm font-medium text-[rgb(var(--text-primary))] mb-2">
@@ -897,7 +1535,6 @@ export default function VideoEditorPage() {
                   <div className="overflow-x-auto max-h-[520px] overflow-y-auto">
                     <ScriptFragmentsTable
                       scriptContent={scriptContentForFragments}
-                      fragmentSplitMode={fragmentSplitMode}
                       sceneImageModelId={sceneImageModelId}
                       onSceneImageModelChange={setSceneImageModelId}
                       onGenerateScene={handleGenerateScene}
@@ -906,7 +1543,12 @@ export default function VideoEditorPage() {
                       splitMethod={splitMethod}
                       splitConfig={splitConfig}
                       prompts={generatedPrompts}
+                      promptSetKey={promptSetKey}
+                      promptPersistenceReady={promptPersistenceReady}
                       onPromptChange={handlePromptChange}
+                      onRegeneratePrompt={(fragmentId) => regeneratePromptFragments([fragmentId])}
+                      regeneratingPromptIds={regeneratingPromptIds}
+                      invalidPromptIds={invalidPromptIds}
                     />
                   </div>
 
@@ -1135,6 +1777,9 @@ export default function VideoEditorPage() {
               </div>
               {thumbError && (
                 <p className="text-sm text-red-600 dark:text-red-400">{thumbError}</p>
+              )}
+              {thumbProgress && (
+                <GenerationProgressCard progress={thumbProgress} nowMs={nowMs} />
               )}
               <button
                 type="button"

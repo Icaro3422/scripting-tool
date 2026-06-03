@@ -10,6 +10,8 @@ export type { SplitMethod, SplitConfigState };
 interface ScriptSplitConfigProps {
   scriptContent: string;
   onMethodChange?: (method: SplitMethod, config: SplitConfigState) => void;
+  /** Controlled config from parent. */
+  value?: SplitConfigState;
   /**
    * Initial method - only applied on mount.
    * For controlled component, manage state in parent and pass via initialConfig.
@@ -41,14 +43,23 @@ function parseNumberInput(value: string, fallback: number): number {
 export function ScriptSplitConfig({
   scriptContent,
   onMethodChange,
+  value,
   initialMethod,
   initialConfig,
 }: ScriptSplitConfigProps) {
-  const [config, setConfig] = useState<SplitConfigState>({
+  const [internalConfig, setInternalConfig] = useState<SplitConfigState>({
     ...DEFAULT_CONFIG,
     ...initialConfig,
     method: initialMethod ?? initialConfig?.method ?? DEFAULT_CONFIG.method,
   });
+  const config = value ?? internalConfig;
+
+  function updateConfig(newConfig: SplitConfigState) {
+    if (!value) {
+      setInternalConfig(newConfig);
+    }
+    onMethodChange?.(newConfig.method, newConfig);
+  }
 
   const { fragmentCount, wordCount } = useMemo(() => {
     if (!scriptContent.trim()) {
@@ -67,8 +78,7 @@ export function ScriptSplitConfig({
 
   function handleMethodChange(newMethod: SplitMethod) {
     const newConfig = { ...config, method: newMethod };
-    setConfig(newConfig);
-    onMethodChange?.(newMethod, newConfig);
+    updateConfig(newConfig);
   }
 
   type NumericConfigKey = "targetChunks" | "strictMinWords" | "strictMaxWords";
@@ -83,8 +93,7 @@ export function ScriptSplitConfig({
       newConfig.strictMinWords = value;
     }
 
-    setConfig(newConfig);
-    onMethodChange?.(newConfig.method, newConfig);
+    updateConfig(newConfig);
   }
 
   if (!scriptContent.trim()) {
@@ -140,18 +149,31 @@ export function ScriptSplitConfig({
           </label>
           <input
             id="targetChunks"
-            type="number"
-            min={2}
-            max={50}
+            type="text"
+            inputMode="numeric"
             value={config.targetChunks}
-            onChange={(e) =>
-              handleConfigChange(
-                "targetChunks",
-                Math.max(2, Math.min(50, parseNumberInput(e.target.value, 10)))
-              )
-            }
+            onChange={(e) => {
+              e.target.value = e.target.value.replace(/[^0-9]/g, "");
+              const val = e.target.value;
+              if (val === "") return;
+              const num = parseInt(val, 10);
+              if (num > 0 && num <= 500) {
+                handleConfigChange("targetChunks", num);
+              }
+            }}
+            onBlur={(e) => {
+              const val = e.target.value.replace(/[^0-9]/g, "");
+              const num = parseInt(val || "10", 10);
+              if (num < 2) {
+                handleConfigChange("targetChunks", 10);
+              } else if (num > 500) {
+                handleConfigChange("targetChunks", 500);
+              }
+            }}
+            placeholder="10"
             className="w-20 rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--bg-muted))] px-2 py-1.5 text-sm text-[rgb(var(--text-primary))] focus:outline-none focus:ring-2 focus:ring-[rgb(var(--accent))]"
           />
+          <span className="text-xs text-[rgb(var(--text-muted))]">(2-500)</span>
         </div>
       )}
 
@@ -162,31 +184,55 @@ export function ScriptSplitConfig({
           </label>
           <input
             id="strictMinWords"
-            type="number"
-            min={5}
-            max={30}
+            type="text"
+            inputMode="numeric"
             value={config.strictMinWords}
-            onChange={(e) =>
-              handleConfigChange(
-                "strictMinWords",
-                Math.max(5, Math.min(30, parseNumberInput(e.target.value, 15)))
-              )
-            }
+            onChange={(e) => {
+              e.target.value = e.target.value.replace(/[^0-9]/g, "");
+              const val = e.target.value;
+              if (val === "") return;
+              const num = parseInt(val, 10);
+              if (num > 0 && num <= 100) {
+                handleConfigChange("strictMinWords", num);
+              }
+            }}
+            onBlur={(e) => {
+              const val = e.target.value.replace(/[^0-9]/g, "");
+              const num = parseInt(val || "15", 10);
+              if (num < 5) {
+                handleConfigChange("strictMinWords", 5);
+              } else if (num > 100) {
+                handleConfigChange("strictMinWords", 100);
+              }
+            }}
+            placeholder="15"
             className="w-20 rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--bg-muted))] px-2 py-1.5 text-sm text-[rgb(var(--text-primary))] focus:outline-none focus:ring-2 focus:ring-[rgb(var(--accent))]"
           />
           <span className="text-sm text-[rgb(var(--text-muted))]">a</span>
           <input
             id="strictMaxWords"
-            type="number"
-            min={5}
-            max={35}
+            type="text"
+            inputMode="numeric"
             value={config.strictMaxWords}
-            onChange={(e) =>
-              handleConfigChange(
-                "strictMaxWords",
-                Math.max(5, Math.min(35, parseNumberInput(e.target.value, 21)))
-              )
-            }
+            onChange={(e) => {
+              e.target.value = e.target.value.replace(/[^0-9]/g, "");
+              const val = e.target.value;
+              if (val === "") return;
+              const num = parseInt(val, 10);
+              if (num > 0 && num <= 100) {
+                handleConfigChange("strictMaxWords", num);
+              }
+            }}
+            onBlur={(e) => {
+              const val = e.target.value.replace(/[^0-9]/g, "");
+              const num = parseInt(val || "21", 10);
+              if (num < 5) {
+                handleConfigChange("strictMaxWords", 5);
+              } else if (num > 100) {
+                handleConfigChange("strictMaxWords", 100);
+              }
+            }}
+            placeholder="21"
             className="w-20 rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--bg-muted))] px-2 py-1.5 text-sm text-[rgb(var(--text-primary))] focus:outline-none focus:ring-2 focus:ring-[rgb(var(--accent))]"
           />
         </div>

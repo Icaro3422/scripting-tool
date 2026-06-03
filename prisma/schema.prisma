@@ -11,37 +11,46 @@ datasource db {
 }
 
 model User {
-  id            String    @id @default(cuid())
-  clerkId       String    @unique
-  email         String?
-  name          String?
-  imageUrl      String?
-  /** Balance en centavos (ej. 1000 = $10.00). Se descuenta por uso de IA. */
-  balanceCents  Int       @default(0)
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
-  channels      Channel[]
-  projects      Project[]
-  presets       Preset[]
-  scripts       Script[]
-  thumbnails    Thumbnail[]
-  usageRecords  UsageRecord[]
+  id              String           @id @default(cuid())
+  clerkId         String           @unique
+  email           String?
+  name            String?
+  imageUrl        String?
+  /**
+   * Balance en centavos (ej. 1000 = $10.00). Se descuenta por uso de IA.
+   */
+  balanceCents    Int              @default(0)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  channels        Channel[]
+  projects        Project[]
+  presets         Preset[]
+  scripts         Script[]
+  thumbnails      Thumbnail[]
+  usageRecords    UsageRecord[]
+  imagePromptSets ImagePromptSet[]
+  imagePrompts    ImagePrompt[]
+  masterPrompts   MasterPrompt[]
 }
 
 model UsageRecord {
-  id             String   @id @default(cuid())
-  userId         String
-  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  /** script | thumbnail | scene-image | channel-analyze */
-  operationType  String
-  provider       String
-  model          String?
-  inputTokens    Int      @default(0)
-  outputTokens   Int      @default(0)
-  /** Coste estimado en centavos */
-  costCents      Int      @default(0)
-  metadata       Json?
-  createdAt      DateTime @default(now())
+  id            String   @id @default(cuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /**
+   * script | thumbnail | scene-image | channel-analyze
+   */
+  operationType String
+  provider      String
+  model         String?
+  inputTokens   Int      @default(0)
+  outputTokens  Int      @default(0)
+  /**
+   * Coste estimado en centavos
+   */
+  costCents     Int      @default(0)
+  metadata      Json?
+  createdAt     DateTime @default(now())
 }
 
 model Channel {
@@ -69,95 +78,183 @@ model Channel {
 }
 
 model Preset {
-  id          String    @id @default(cuid())
+  id          String   @id @default(cuid())
   userId      String
-  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   channelId   String?
-  channel     Channel?  @relation(fields: [channelId], references: [id], onDelete: SetNull)
+  channel     Channel? @relation(fields: [channelId], references: [id], onDelete: SetNull)
   name        String
-  description String?   @db.Text
+  description String?  @db.Text
   payload     Json
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
   scripts     Script[]
 }
 
 model Project {
-  id           String    @id @default(cuid())
-  userId       String
-  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  channelId    String?
-  channel      Channel?  @relation(fields: [channelId], references: [id], onDelete: SetNull)
-  /** Nombre del canal / área de trabajo */
-  title        String
-  description  String?   @db.Text
-  /** Legacy: estado del proyecto (usado al crear Video en migración) */
-  status       String?   @default("draft")
-  /** stickman | real_people | cartoon | mixed - estilo visual para la IA */
-  contentStyle String?   @default("mixed")
-  /** IDs de presets de referencia (canales del mismo nicho) */
-  presetIds    String[]   @default([])
-  /** Colores de marca (hex o nombres) para la IA */
-  brandColors  String[]   @default([])
-  /** Tipografía de marca (ej: Montserrat Bold) */
-  typography   String?
-  /** URLs de imágenes de referencia para estilo visual */
-  referenceImageUrls String[] @default([])
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
-  videos       Video[]
-  scripts      Script[]
-  thumbnails   Thumbnail[]
+  id                 String      @id @default(cuid())
+  userId             String
+  user               User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  channelId          String?
+  channel            Channel?    @relation(fields: [channelId], references: [id], onDelete: SetNull)
+  /**
+   * Nombre del canal / área de trabajo
+   */
+  title              String
+  description        String?     @db.Text
+  /**
+   * Legacy: estado del proyecto (usado al crear Video en migración)
+   */
+  status             String?     @default("draft")
+  /**
+   * stickman | real_people | cartoon | mixed - estilo visual para la IA
+   */
+  contentStyle       String?     @default("mixed")
+  /**
+   * IDs de presets de referencia (canales del mismo nicho)
+   */
+  presetIds          String[]    @default([])
+  /**
+   * Colores de marca (hex o nombres) para la IA
+   */
+  brandColors        String[]    @default([])
+  /**
+   * Tipografía de marca (ej: Montserrat Bold)
+   */
+  typography         String?
+  /**
+   * URLs de imágenes de referencia para estilo visual
+   */
+  referenceImageUrls String[]    @default([])
+  createdAt          DateTime    @default(now())
+  updatedAt          DateTime    @updatedAt
+  videos             Video[]
+  scripts            Script[]
+  thumbnails         Thumbnail[]
 }
 
 model Video {
-  id          String    @id @default(cuid())
-  projectId   String
-  project     Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  /** Título del video */
-  title       String
-  description String?   @db.Text
-  /** draft | script_ready | thumbnail_ready | ready | scheduled | published */
-  status      String    @default("draft")
-  /** YouTube video ID si se publicó */
-  youtubeVideoId String?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
-  scripts     Script[]
-  thumbnails  Thumbnail[]
+  id              String           @id @default(cuid())
+  projectId       String
+  project         Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  /**
+   * Título del video
+   */
+  title           String
+  description     String?          @db.Text
+  /**
+   * draft | script_ready | thumbnail_ready | ready | scheduled | published
+   */
+  status          String           @default("draft")
+  /**
+   * YouTube video ID si se publicó
+   */
+  youtubeVideoId  String?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  scripts         Script[]
+  thumbnails      Thumbnail[]
+  imagePromptSets ImagePromptSet[]
 }
 
 model Script {
-  id          String    @id @default(cuid())
-  userId      String
-  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  videoId     String?
-  video       Video?    @relation(fields: [videoId], references: [id], onDelete: Cascade)
-  projectId   String?
-  project     Project?  @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  presetId    String?
-  preset      Preset?   @relation(fields: [presetId], references: [id], onDelete: SetNull)
-  title       String
-  content     String    @db.Text
-  blobUrl     String?
-  aiProvider  String?
-  aiModel     String?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  id              String           @id @default(cuid())
+  userId          String
+  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  videoId         String?
+  video           Video?           @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  projectId       String?
+  project         Project?         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  presetId        String?
+  preset          Preset?          @relation(fields: [presetId], references: [id], onDelete: SetNull)
+  title           String
+  content         String           @db.Text
+  blobUrl         String?
+  aiProvider      String?
+  aiModel         String?
+  source          String           @default("ai")
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  imagePromptSets ImagePromptSet[]
+}
+
+model ImagePromptSet {
+  id              String        @id @default(cuid())
+  userId          String
+  user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  videoId         String
+  video           Video         @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  scriptId        String
+  script          Script        @relation(fields: [scriptId], references: [id], onDelete: Cascade)
+  scriptContentHash String
+  style           String        @db.Text
+  styleHash       String
+  splitConfig     Json
+  splitConfigHash String
+  fragmentCount   Int
+  isActive        Boolean       @default(true)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  prompts         ImagePrompt[]
+
+  @@unique([videoId, scriptId, scriptContentHash, styleHash, splitConfigHash], name: "image_prompt_set_identity")
+  @@index([userId, videoId])
+  @@index([scriptId])
+}
+
+model ImagePrompt {
+  id           String         @id @default(cuid())
+  promptSetId  String
+  promptSet    ImagePromptSet @relation(fields: [promptSetId], references: [id], onDelete: Cascade)
+  userId       String
+  user         User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  fragmentId   Int
+  originalText String         @db.Text
+  imagePrompt  String         @db.Text
+  source       String         @default("ai")
+  status       String         @default("generated")
+  provider     String?
+  model        String?
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  @@unique([promptSetId, fragmentId])
+  @@index([userId])
 }
 
 model Thumbnail {
-  id            String    @id @default(cuid())
+  id            String   @id @default(cuid())
   userId        String
-  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   videoId       String?
-  video         Video?    @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  video         Video?   @relation(fields: [videoId], references: [id], onDelete: Cascade)
   projectId     String?
-  project       Project?  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project       Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
   blobUrl       String
-  prompt        String?   @db.Text
+  prompt        String?  @db.Text
   aiProvider    String?
   fragmentIndex Int?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model MasterPrompt {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  /**
+   * image | script — tipo de contenido para el que se usa este master prompt
+   */
+  type      String   @default("image")
+  /**
+   * Contenido completo del system prompt maestro
+   */
+  content   String   @db.Text
+  isDefault Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, name])
+  @@index([userId, type])
 }

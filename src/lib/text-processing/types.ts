@@ -40,6 +40,8 @@ export interface PromptResult {
   fragment_id: number;
   original_text: string;
   image_prompt: string;
+  provider?: string;
+  model?: string;
 }
 
 export interface GenerateResponseBody {
