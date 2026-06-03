@@ -23,13 +23,27 @@ const openRouterSiteUrl = process.env.OPENROUTER_SITE_URL ?? process.env.NEXT_PU
 const openRouterAppName = process.env.OPENROUTER_APP_NAME ?? "Scripting Tool";
 
 // Google AI Studio: Completely free, no credit card required, 1M context
-const googleApiKey = process.env.GOOGLE_AI_API_KEY ?? process.env.GOOGLE_API_KEY ?? "";
-const googleModel = process.env.GOOGLE_MODEL ?? "gemini-2.0-flash";
+const googleApiKeys = (process.env.GOOGLE_AI_API_KEY ?? process.env.GOOGLE_API_KEY ?? "")
+  .split(",")
+  .map((k) => k.trim())
+  .filter(Boolean);
+const googleModel = process.env.GOOGLE_MODEL ?? "gemini-2.5-flash";
 const googleBaseUrl = "https://generativelanguage.googleapis.com/v1beta/models";
 
 // Ollama: Local models, completely free, no limits
 const ollamaBaseUrl = process.env.OLLAMA_BASE_URL ?? "http://localhost:11434";
 const ollamaModel = process.env.OLLAMA_MODEL ?? "llama3.2";
+
+/**
+ * Orden de proveedores para el fallback chain.
+ * Configurable via PROMPT_PROVIDER_ORDER (comma-separated).
+ * Ej: "google,ollama,groq,openrouter"
+ * Default: "ollama,groq,google,openrouter"
+ */
+const PROVIDER_ORDER = (process.env.PROMPT_PROVIDER_ORDER ?? "ollama,groq,google,openrouter")
+  .split(",")
+  .map((s) => s.trim().toLowerCase())
+  .filter(Boolean);
 
 const maxFragmentsPerRequest = Number.isFinite(Number(process.env.MAX_PROMPT_FRAGMENTS_PER_REQUEST))
   ? Number(process.env.MAX_PROMPT_FRAGMENTS_PER_REQUEST)
@@ -40,6 +54,10 @@ const maxFragmentTextLength = Number.isFinite(Number(process.env.MAX_PROMPT_FRAG
 const maxTotalFragmentChars = Number.isFinite(Number(process.env.MAX_PROMPT_TOTAL_FRAGMENT_CHARS))
   ? Number(process.env.MAX_PROMPT_TOTAL_FRAGMENT_CHARS)
   : 500000;
+
+const interFragmentDelayMs = Number.isFinite(Number(process.env.PROMPT_INTER_FRAGMENT_DELAY_MS))
+  ? Number(process.env.PROMPT_INTER_FRAGMENT_DELAY_MS)
+  : 0;
 
 // ============================================================================
 // Zod Schemas
@@ -54,6 +72,7 @@ const requestSchema = z
   .object({
     fragments: z.array(fragmentSchema).min(1).max(maxFragmentsPerRequest),
     style: z.string().max(500).optional().default("Cinematic photography, high quality, detailed"),
+    masterPromptId: z.string().max(50).optional(),
   })
   .superRefine(({ fragments }, ctx) => {
     // Validate unique fragment IDs
@@ -166,7 +185,11 @@ function repairJson(input: string): string {
   // Strip markdown code blocks if present
   fixed = fixed.replace(/^```(?:json)?\s*\n?/i, "").replace(/```\s*$/, "");
 
-  // Common LLM typo: {"image_prompt:"...} instead of {"image_prompt": "..."}
+  // Fix "key:"literal → "key":"literal (colon inside key quotes, value not quoted)
+  // Example: "image_prompt:"A pond..." → "image_prompt":"A pond..."
+  fixed = fixed.replace(/"([A-Za-z_][A-Za-z0-9_]*):"\s*(?=[A-Za-z0-9])/g, '"$1":"');
+
+  // Fix "key:"[ → "key": [ and "key:"{ → "key": { and "key:"" → "key": "
   fixed = fixed.replace(/"([A-Za-z_][A-Za-z0-9_]*):"\s*(?=[[{"])/g, '"$1":');
 
   // Remove trailing commas before } or ]
@@ -284,16 +307,26 @@ function normalizePromptResult(
   const singleExpected = expectedFragments.length === 1 ? expectedFragments[0] : null;
   const normalized = normalizeObjectKeys(item as Record<string, unknown>);
 
-  const fragmentId =
-    toPositiveInt(firstDefined(normalized, ["fragment_id", "fragmentid", "id", "fragment", "fragment_index", "fragmentindex", "index"])) ??
-    singleExpected?.id;
+  const parsedId = toPositiveInt(firstDefined(normalized, ["fragment_id", "fragmentid", "id", "fragment", "fragment_index", "fragmentindex", "index"]));
+  const fragmentId = (parsedId !== null && expectedById.has(parsedId)) ? parsedId : singleExpected?.id;
   const expectedFragment = fragmentId ? expectedById.get(fragmentId) : singleExpected;
 
   const originalText = expectedFragment?.text ??
     toNonEmptyString(firstDefined(normalized, ["original_text", "originaltext", "text", "source_text", "sourcetext", "input_text", "inputtext"]));
-  const imagePrompt = toNonEmptyString(
+  let imagePrompt = toNonEmptyString(
     firstDefined(normalized, ["image_prompt", "imageprompt", "prompt", "visual_prompt", "visualprompt", "image", "description"]),
   );
+
+  // Fallback for models that return non-standard formats (e.g. bullet points as keys)
+  // Extract the longest descriptive text value as image_prompt
+  if (!imagePrompt) {
+    const textValues = Object.values(normalized).filter(
+      (v): v is string => typeof v === "string" && v.length >= 50,
+    );
+    if (textValues.length > 0) {
+      imagePrompt = textValues.reduce((a, b) => (a.length > b.length ? a : b));
+    }
+  }
 
   if (imagePrompt && isLowQualityImagePrompt(imagePrompt)) {
     throw new Error(`image_prompt inválido para fragment_id ${fragmentId ?? "desconocido"}: ${JSON.stringify(imagePrompt)}`);
@@ -386,9 +419,9 @@ function getErrorStatusCode(error: unknown): number | null {
   return null;
 }
 
-function shouldFallbackToOpenRouter(error: unknown): boolean {
+function shouldFallback(error: unknown): boolean {
   const statusCode = getErrorStatusCode(error);
-  if (statusCode === 429 || statusCode === 503) {
+  if (statusCode === 401 || statusCode === 403 || statusCode === 429 || statusCode === 503) {
     return true;
   }
 
@@ -398,7 +431,9 @@ function shouldFallbackToOpenRouter(error: unknown): boolean {
     message.includes("quota") ||
     message.includes("too many requests") ||
     message.includes("context") ||
-    message.includes("token")
+    message.includes("token") ||
+    message.includes("api key") ||
+    message.includes("unauthorized")
   );
 }
 
@@ -438,12 +473,19 @@ async function requestGroqBatch(
   systemPrompt: string,
   batch: PromptFragment[]
 ): Promise<PromptResult[]> {
+  // Groq free tier has 6000 TPM limit — keep input + output under it
+  // Estimate: 1 token ≈ 4 chars. Target ≤ 3500 input tokens to fit 2048 output
+  const estimatedInputTokens = Math.ceil((systemPrompt.length + JSON.stringify(batch).length) / 4);
+  const truncatedPrompt = estimatedInputTokens > 3500
+    ? systemPrompt.slice(0, Math.floor(3500 * 4) - JSON.stringify(batch).length / 4)
+    : systemPrompt;
+
   const completion = await groq.chat.completions.create({
     model,
     temperature: 0.5,
-    max_tokens: 4096,
+    max_tokens: 2048,
     messages: [
-      { role: "system", content: systemPrompt },
+      { role: "system", content: truncatedPrompt },
       { role: "user", content: JSON.stringify(batch) },
     ],
   });
@@ -497,46 +539,53 @@ async function requestGoogleBatch(
   systemPrompt: string,
   batch: PromptFragment[]
 ): Promise<PromptResult[]> {
-  if (!googleApiKey) {
+  if (googleApiKeys.length === 0) {
     throw new Error("GOOGLE_AI_API_KEY is missing");
   }
 
   const url = `${googleBaseUrl}/${googleModel}:generateContent`;
 
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-goog-api-key": googleApiKey,
-    },
-    body: JSON.stringify({
-      contents: [
-        {
-          parts: [
-            { text: `${systemPrompt}\n\n${JSON.stringify(batch)}` },
-          ],
+  for (const apiKey of googleApiKeys) {
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": apiKey,
         },
-      ],
-      generationConfig: {
-        temperature: 0.5,
-        maxOutputTokens: 4096,
-      },
-    }),
-  });
+        body: JSON.stringify({
+          contents: [
+            {
+              parts: [
+                { text: `${systemPrompt}\n\n${JSON.stringify(batch)}` },
+              ],
+            },
+          ],
+          generationConfig: {
+            temperature: 0.5,
+            maxOutputTokens: 4096,
+          },
+        }),
+      });
 
-  const payload = (await response.json().catch(() => null)) as unknown;
-  if (!response.ok) {
-    console.error("[prompt-generation] Google AI error response:", JSON.stringify(payload).slice(0, 500));
-    throw new Error(extractErrorMessage(payload, "Google AI request failed"));
-  }
+      const payload = (await response.json().catch(() => null)) as unknown;
+      if (!response.ok) {
+        console.error("[prompt-generation] Google AI error response:", JSON.stringify(payload).slice(0, 500));
+        throw new Error(extractErrorMessage(payload, "Google AI request failed"));
+      }
 
-  // Extract text from Google AI response
-  const text = extractGoogleContent(payload);
-  if (!text) {
-    console.error("[prompt-generation] Google AI returned empty content. Payload:", JSON.stringify(payload).slice(0, 500));
-    throw new Error("Google AI devolvió una respuesta vacía");
+      const text = extractGoogleContent(payload);
+      if (!text) {
+        console.error("[prompt-generation] Google AI returned empty content. Payload:", JSON.stringify(payload).slice(0, 500));
+        throw new Error("Google AI devolvió una respuesta vacía");
+      }
+      return parseModelJson(text, batch);
+    } catch (error: unknown) {
+      if (!shouldFallback(error)) throw error;
+      console.warn("[prompt-generation] Google key failed, trying next:", summarizeProviderError(error));
+    }
   }
-  return parseModelJson(text, batch);
+  throw new Error("All Google API keys failed");
 }
 
 function extractGoogleContent(payload: unknown): string {
@@ -641,6 +690,68 @@ function selectFragmentResult(provider: string, fragment: PromptFragment, result
 }
 
 // ============================================================================
+// Provider Registry (order driven by PROMPT_PROVIDER_ORDER env var)
+// ============================================================================
+
+type ProviderEntry = {
+  id: string;
+  name: string;
+  model: string;
+  enabled: boolean;
+  request: (systemPrompt: string, batch: PromptFragment[]) => Promise<PromptResult[]>;
+  maxRetries: number;
+};
+
+function buildProviderEntries(
+  groq: Groq | null,
+  hasGoogle: boolean,
+  hasOllama: boolean,
+  hasOpenRouter: boolean,
+): ProviderEntry[] {
+  const entries: ProviderEntry[] = [
+    {
+      id: "google",
+      name: "Google AI",
+      model: googleModel,
+      enabled: hasGoogle,
+      request: (sp, batch) => requestGoogleBatch(sp, batch),
+      maxRetries: 2,
+    },
+    {
+      id: "ollama",
+      name: "Ollama",
+      model: ollamaModel,
+      enabled: hasOllama,
+      request: (sp, batch) => requestOllamaBatch(sp, batch),
+      maxRetries: 0,
+    },
+    {
+      id: "groq",
+      name: "Groq",
+      model,
+      enabled: !!groq,
+      request: (sp, batch) => requestGroqBatch(groq!, sp, batch),
+      maxRetries: 0,
+    },
+    {
+      id: "openrouter",
+      name: "OpenRouter",
+      model: openRouterModel,
+      enabled: hasOpenRouter,
+      request: (sp, batch) => requestOpenRouterBatch(sp, batch),
+      maxRetries: 0,
+    },
+  ];
+
+  const orderMap = new Map(PROVIDER_ORDER.map((id, i) => [id, i]));
+  return entries.sort((a, b) => {
+    const aIdx = orderMap.get(a.id) ?? 999;
+    const bIdx = orderMap.get(b.id) ?? 999;
+    return aIdx - bIdx;
+  });
+}
+
+// ============================================================================
 // API Handler
 // ============================================================================
 
@@ -661,7 +772,7 @@ export async function POST(request: Request): Promise<Response> {
     create: { clerkId: userId },
   });
 
-  const hasGoogle = !!googleApiKey;
+  const hasGoogle = googleApiKeys.length > 0;
   if (!hasGroq && !hasOpenRouter && !hasGoogle && !hasOllama) {
     console.error("[prompt-generation] No LLM provider configured");
     return NextResponse.json(
@@ -681,61 +792,59 @@ export async function POST(request: Request): Promise<Response> {
     );
   }
 
+  // Resolve the system prompt: if masterPromptId is provided, load from DB
+  let systemPrompt: string;
+  const { masterPromptId, style } = parsedBody.data;
+
+  if (masterPromptId) {
+    const masterPrompt = await prisma.masterPrompt.findUnique({
+      where: { id: masterPromptId },
+    });
+
+    if (!masterPrompt || masterPrompt.userId !== user.id) {
+      return NextResponse.json(
+        { error: "Master prompt no encontrado o no tenés acceso" },
+        { status: 404 }
+      );
+    }
+
+    systemPrompt = masterPrompt.content;
+  } else {
+    systemPrompt = buildSystemPrompt(style);
+  }
+
   // Use singleton client or create one if needed
   const groq = groqClient ?? (hasGroq ? new Groq({ apiKey: process.env.GROQ_API_KEY }) : null);
-  const systemPrompt = buildSystemPrompt(parsedBody.data.style);
 
-  async function requestFragmentWithFallback(fragment: PromptFragment): Promise<PromptResult> {
+  async function requestFragmentWithFallback(
+    fragment: PromptFragment,
+    entries: ProviderEntry[],
+  ): Promise<PromptResult> {
     const batch = [fragment];
     const providerErrors: string[] = [];
 
-    if (hasOllama) {
-      try {
-        const results = await requestOllamaBatch(systemPrompt, batch);
-        return selectFragmentResult("Ollama", fragment, results);
-      } catch (ollamaError) {
-        console.warn("[prompt-generation] Ollama failed:", ollamaError);
-        providerErrors.push(`Ollama: ${summarizeProviderError(ollamaError)}`);
-      }
-    }
+    for (const entry of entries) {
+      if (!entry.enabled) continue;
 
-    if (groq) {
-      try {
-        const results = await requestGroqBatch(groq, systemPrompt, batch);
-        return selectFragmentResult("Groq", fragment, results);
-      } catch (groqError) {
-        console.warn("[prompt-generation] Groq failed:", groqError);
-        providerErrors.push(`Groq: ${summarizeProviderError(groqError)}`);
-      }
-    }
-
-    if (hasGoogle) {
-      for (let retryCount = 0; retryCount <= 2; retryCount++) {
+      for (let retryCount = 0; retryCount <= entry.maxRetries; retryCount++) {
         try {
-          const results = await requestGoogleBatch(systemPrompt, batch);
-          return selectFragmentResult("Google AI", fragment, results);
-        } catch (googleError) {
-          const retryDelayMs = getRetryDelayMs(googleError, retryCount);
-          if (retryDelayMs !== null && retryCount < 2) {
-            console.warn(`[prompt-generation] Google AI rate limited, retrying in ${retryDelayMs}ms (attempt ${retryCount + 1})`);
-            await new Promise(resolve => setTimeout(resolve, retryDelayMs));
+          const results = await entry.request(systemPrompt, batch);
+          const result = selectFragmentResult(entry.name, fragment, results);
+          return { ...result, provider: entry.name, model: entry.model };
+        } catch (err) {
+          const retryDelayMs = getRetryDelayMs(err, retryCount);
+          if (retryDelayMs !== null && retryCount < entry.maxRetries) {
+            console.warn(
+              `[prompt-generation] ${entry.name} rate limited, retrying in ${retryDelayMs}ms (attempt ${retryCount + 1})`,
+            );
+            await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
             continue;
           }
 
-          console.warn("[prompt-generation] Google AI failed:", googleError);
-          providerErrors.push(`Google AI: ${summarizeProviderError(googleError)}`);
+          console.warn(`[prompt-generation] ${entry.name} failed:`, err);
+          providerErrors.push(`${entry.name}: ${summarizeProviderError(err)}`);
           break;
         }
-      }
-    }
-
-    if (hasOpenRouter) {
-      try {
-        const results = await requestOpenRouterBatch(systemPrompt, batch);
-        return selectFragmentResult("OpenRouter", fragment, results);
-      } catch (orError) {
-        console.warn("[prompt-generation] OpenRouter failed:", orError);
-        providerErrors.push(`OpenRouter: ${summarizeProviderError(orError)}`);
       }
     }
 
@@ -743,24 +852,29 @@ export async function POST(request: Request): Promise<Response> {
     throw new Error(`Todos los proveedores fallaron para el fragmento ${fragment.id}.${details}`);
   }
 
-  // Provider priority per fragment: Ollama (local) > Groq > Google AI > OpenRouter (free)
-  async function requestWithFallback(batch: PromptFragment[]): Promise<PromptResult[]> {
+  // Provider priority is driven by PROMPT_PROVIDER_ORDER env var
+  async function requestWithFallback(batch: PromptFragment[], entries: ProviderEntry[]): Promise<PromptResult[]> {
     const results: PromptResult[] = [];
-    for (const fragment of batch) {
+    for (let idx = 0; idx < batch.length; idx++) {
+      const fragment = batch[idx];
       console.log(`[prompt-generation] Processing fragment ${fragment.id}`);
-      results.push(await requestFragmentWithFallback(fragment));
+      results.push(await requestFragmentWithFallback(fragment, entries));
+      if (interFragmentDelayMs > 0 && idx < batch.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, interFragmentDelayMs));
+      }
     }
     return results;
   }
 
   try {
+    const providerEntries = buildProviderEntries(groq, hasGoogle, hasOllama, hasOpenRouter);
     const batches = chunkFragments(parsedBody.data.fragments, maxBatchSize);
 
     // Process batches sequentially to respect rate limits
     const allResults: PromptResult[] = [];
     for (let i = 0; i < batches.length; i++) {
       console.log(`[prompt-generation] Processing batch ${i + 1}/${batches.length}`);
-      const batchResult = await requestWithFallback(batches[i]);
+      const batchResult = await requestWithFallback(batches[i], providerEntries);
       allResults.push(...batchResult);
       // Small delay between batches to avoid rate limits
       if (i < batches.length - 1) {
@@ -799,12 +913,18 @@ export async function POST(request: Request): Promise<Response> {
       userId: user.id,
       operationType: "image-prompt",
       provider: "prompt-fallback-chain",
-      model: [
-        hasOllama ? ollamaModel : null,
-        groq ? model : null,
-        hasGoogle ? googleModel : null,
-        hasOpenRouter ? openRouterModel : null,
-      ].filter(Boolean).join(" > "),
+      model: providerEntries
+        .filter((e) => e.enabled)
+        .map((e) => {
+          switch (e.id) {
+            case "google": return googleModel;
+            case "ollama": return ollamaModel;
+            case "groq": return model;
+            case "openrouter": return openRouterModel;
+            default: return e.id;
+          }
+        })
+        .join(" > "),
       inputTokens: estimateTokensFromText(systemPrompt) +
         parsedBody.data.fragments.reduce((sum, fragment) => sum + estimateTokensFromText(fragment.text), 0),
       outputTokens: results.reduce(
@@ -814,7 +934,8 @@ export async function POST(request: Request): Promise<Response> {
       metadata: {
         fragmentCount: results.length,
         requestedFragmentCount: parsedBody.data.fragments.length,
-        styleLength: parsedBody.data.style.length,
+        styleLength: style?.length ?? 0,
+        usedMasterPrompt: !!masterPromptId,
       },
     });
 

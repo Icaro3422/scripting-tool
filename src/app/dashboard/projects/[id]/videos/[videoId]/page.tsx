@@ -21,6 +21,7 @@ import { ScriptFragmentsTable } from "@/components/ScriptFragmentsTable";
 import { ScriptTimeline } from "@/components/ScriptTimeline";
 import { ScriptSplitConfig } from "@/components/ScriptSplitConfig";
 import { ImageStyleSelector } from "@/components/ImageStyleSelector";
+import { MasterPromptManager } from "@/components/MasterPromptManager";
 import { ExportMenu } from "@/components/ExportMenu";
 import {
   getStorageMode,
@@ -238,12 +239,14 @@ export default function VideoEditorPage() {
 
   // Image prompt generation state (Iteration 2)
   const [imageStyle, setImageStyle] = useState("");
+  const [masterPromptId, setMasterPromptId] = useState<string | null>(null);
   const [generatedPrompts, setGeneratedPrompts] = useState<PromptResult[]>([]);
   const [promptsLoading, setPromptsLoading] = useState(false);
   const [promptsError, setPromptsError] = useState<string | null>(null);
   const [promptsProgress, setPromptsProgress] = useState<GenerationProgressState | null>(null);
   const [regeneratingPromptIds, setRegeneratingPromptIds] = useState<Set<number>>(new Set());
   const skipNextPromptHydrationRef = useRef(false);
+  const stateRestoredRef = useRef(false);
 
   useEffect(() => {
     setStorageModeState(getStorageMode());
@@ -307,6 +310,51 @@ export default function VideoEditorPage() {
 
     return () => controller.abort();
   }, [projectId, videoId]);
+
+  // Restore imageStyle and splitConfig from active prompt set on page load
+  useEffect(() => {
+    const scriptId = video?.scripts?.[0]?.id;
+    if (!projectId || !videoId || !scriptId || stateRestoredRef.current) return;
+
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        const res = await fetch(
+          `/api/projects/${projectId}/videos/${videoId}/prompts?latestForVideo=true`,
+          { signal: controller.signal },
+        );
+        if (!res.ok) return;
+        const data = await res.json();
+        if (controller.signal.aborted) return;
+
+        const style = data?.promptSet?.style;
+        if (typeof style === "string" && style) {
+          setImageStyle(style);
+          stateRestoredRef.current = true;
+
+          // Restore splitConfig if available
+          const sc = data?.promptSet?.splitConfig;
+          if (sc && typeof sc === "object") {
+            setSplitConfig({
+              method: sc.method ?? "strict",
+              targetChunks: sc.targetChunks ?? 10,
+              strictMinWords: sc.strictMinWords ?? 15,
+              strictMaxWords: sc.strictMaxWords ?? 21,
+            });
+          }
+
+          // Restore prompts immediately
+          if (Array.isArray(data?.results) && data.results.length > 0) {
+            setGeneratedPrompts(data.results as PromptResult[]);
+          }
+        }
+      } catch {
+        // Silently fail — restoration is best-effort
+      }
+    })();
+
+    return () => controller.abort();
+  }, [projectId, videoId, video?.scripts]);
 
   useEffect(() => {
     if (video?.title && !thumbTitle) setThumbTitle(video.title);
@@ -655,10 +703,16 @@ export default function VideoEditorPage() {
   }
 
   async function requestPromptResults(fragments: PromptFragmentRequest[]): Promise<PromptResult[]> {
+    const body: Record<string, unknown> = { fragments };
+    if (masterPromptId) {
+      body.masterPromptId = masterPromptId;
+    } else {
+      body.style = imageStyle;
+    }
     const res = await fetch("/api/prompts/generate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ fragments, style: imageStyle }),
+      body: JSON.stringify(body),
     });
     const data = await res.json().catch(() => null);
     if (!res.ok) {
@@ -690,8 +744,8 @@ export default function VideoEditorPage() {
       setPromptsError("No encontré fragmentos para regenerar.");
       return;
     }
-    if (!imageStyle.trim()) {
-      setPromptsError("Selecciona un estilo de imagen.");
+    if (!imageStyle.trim() && !masterPromptId) {
+      setPromptsError("Selecciona un estilo de imagen o un Master Prompt.");
       return;
     }
     if (!latestScript?.id || scriptContentForFragments !== latestScript.content.trim()) {
@@ -779,8 +833,8 @@ export default function VideoEditorPage() {
       setPromptsError("Genera un script primero.");
       return;
     }
-    if (!imageStyle.trim()) {
-      setPromptsError("Selecciona un estilo de imagen.");
+    if (!imageStyle.trim() && !masterPromptId) {
+      setPromptsError("Selecciona un estilo de imagen o un Master Prompt.");
       return;
     }
     if (!latestScript?.id || scriptContentForFragments !== latestScript.content.trim()) {
@@ -1439,7 +1493,10 @@ export default function VideoEditorPage() {
                     <ImageStyleSelector
                       value={imageStyle}
                       onChange={setImageStyle}
+                      masterPromptId={masterPromptId}
+                      onMasterPromptChange={setMasterPromptId}
                     />
+                    <MasterPromptManager />
                     {promptsError && (
                       <p className="text-sm text-red-600 dark:text-red-400">{promptsError}</p>
                     )}

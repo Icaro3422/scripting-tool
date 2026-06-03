@@ -18,6 +18,8 @@ const promptResultSchema = z.object({
   fragment_id: z.number().int().positive(),
   original_text: z.string().min(1),
   image_prompt: z.string().min(1),
+  provider: z.string().max(200).optional(),
+  model: z.string().max(200).optional(),
 });
 
 const identitySchema = z.object({
@@ -162,6 +164,8 @@ function serializePromptSet(promptSet: {
     imagePrompt: string;
     source: string;
     status: string;
+    provider: string | null;
+    model: string | null;
     updatedAt: Date;
   }>;
 }) {
@@ -182,6 +186,8 @@ function serializePromptSet(promptSet: {
         image_prompt: prompt.imagePrompt,
         source: prompt.source,
         status: prompt.status,
+        provider: prompt.provider,
+        model: prompt.model,
         updatedAt: prompt.updatedAt,
       }))
       .sort((a, b) => a.fragment_id - b.fragment_id),
@@ -202,6 +208,22 @@ export async function GET(
     if (!video) return NextResponse.json({ error: "Video no encontrado" }, { status: 404 });
 
     const searchParams = req.nextUrl.searchParams;
+
+    // Special mode: return the most recent active prompt set metadata (for state restoration)
+    if (searchParams.get("latestForVideo") === "true") {
+      const latestSet = await prisma.imagePromptSet.findFirst({
+        where: { videoId: video.id, isActive: true },
+        orderBy: { updatedAt: "desc" },
+        include: { prompts: true },
+      });
+
+      if (!latestSet) {
+        return NextResponse.json({ promptSet: null, style: null, splitConfig: null });
+      }
+
+      return NextResponse.json(serializePromptSet(latestSet));
+    }
+
     const scriptId = searchParams.get("scriptId");
     const scriptContentHash = searchParams.get("scriptContentHash");
     const splitConfigRaw = searchParams.get("splitConfig");
@@ -314,12 +336,16 @@ export async function POST(
             imagePrompt: result.image_prompt,
             source: parsed.source,
             status: parsed.source === "manual" ? "edited" : "generated",
+            provider: result.provider,
+            model: result.model,
           },
           update: {
             originalText: result.original_text,
             imagePrompt: result.image_prompt,
             source: parsed.source,
             status: parsed.source === "manual" ? "edited" : "generated",
+            provider: result.provider,
+            model: result.model,
           },
         });
       }

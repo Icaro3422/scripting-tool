@@ -88,6 +88,19 @@ export function ScriptFragmentsTable({
     return map;
   }, [prompts]);
 
+  // Build a lookup map for provider/model by fragment_id
+  const providerMap = useMemo(() => {
+    const map = new Map<number, { provider?: string; model?: string }>();
+    if (prompts) {
+      for (const p of prompts) {
+        if (p.provider || p.model) {
+          map.set(p.fragment_id, { provider: p.provider, model: p.model });
+        }
+      }
+    }
+    return map;
+  }, [prompts]);
+
   // Determinar método de división
   const fragmentos = useMemo(() => {
     const method = splitConfig?.method ?? splitMethod;
@@ -128,9 +141,13 @@ export function ScriptFragmentsTable({
     return promptMap.get(fragmentId);
   }
 
+  function getProviderForFragment(fragmentId: number): { provider?: string; model?: string } | undefined {
+    return providerMap.get(fragmentId);
+  }
+
   if (fragmentos.length === 0) return null;
 
-  const rows: { index: number; text: string; words: number; showCopyButton: boolean; copyFrom: number; copyTo: number; prompt?: string }[] = [];
+  const rows: { index: number; text: string; words: number; showCopyButton: boolean; copyFrom: number; copyTo: number; prompt?: string; providerInfo?: { provider?: string; model?: string } }[] = [];
   for (let i = 0; i < fragmentos.length; i++) {
     const text = fragmentos[i];
     const words = text.split(/\s+/).filter(Boolean).length;
@@ -147,6 +164,7 @@ export function ScriptFragmentsTable({
       copyFrom,
       copyTo,
       prompt: getPromptForFragment(i + 1),
+      providerInfo: getProviderForFragment(i + 1),
     });
   }
 
@@ -229,6 +247,13 @@ export function ScriptFragmentsTable({
                             </button>
                           )}
                         </div>
+                        {row.providerInfo?.provider && (
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[10px] text-[rgb(var(--text-muted))] px-1.5 py-0.5 rounded border border-[rgb(var(--border))] bg-[rgb(var(--bg-surface))]">
+                              {row.providerInfo.model ? `${row.providerInfo.provider} · ${row.providerInfo.model}` : row.providerInfo.provider}
+                            </span>
+                          </div>
+                        )}
                       </div>
                     ) : (
                       <div className="space-y-2">

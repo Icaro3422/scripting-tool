@@ -30,6 +30,7 @@ model User {
   usageRecords    UsageRecord[]
   imagePromptSets ImagePromptSet[]
   imagePrompts    ImagePrompt[]
+  masterPrompts   MasterPrompt[]
 }
 
 model UsageRecord {
@@ -212,6 +213,8 @@ model ImagePrompt {
   imagePrompt  String         @db.Text
   source       String         @default("ai")
   status       String         @default("generated")
+  provider     String?
+  model        String?
   createdAt    DateTime       @default(now())
   updatedAt    DateTime       @updatedAt
 
@@ -233,4 +236,25 @@ model Thumbnail {
   fragmentIndex Int?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
+}
+
+model MasterPrompt {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  /**
+   * image | script — tipo de contenido para el que se usa este master prompt
+   */
+  type      String   @default("image")
+  /**
+   * Contenido completo del system prompt maestro
+   */
+  content   String   @db.Text
+  isDefault Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, name])
+  @@index([userId, type])
 }
